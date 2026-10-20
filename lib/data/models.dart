@@ -408,6 +408,10 @@ class Voter {
     this.pending = false,
     this.syncError,
     this.visitCount = 0,
+    this.latestVisitedAt,
+    this.latestSupport,
+    this.latestPvcStatus,
+    this.latestPlansToVote,
   });
 
   final String id;
@@ -430,7 +434,16 @@ class Voter {
   /// Not yet sent to the server.
   final bool pending;
   final String? syncError;
+
+  /// Visits recorded on this phone.
   final int visitCount;
+
+  /// Their latest visit by anyone, as the server last said or recorded here
+  /// since, and their answers then. Null if nobody has visited them.
+  final DateTime? latestVisitedAt;
+  final String? latestSupport;
+  final String? latestPvcStatus;
+  final String? latestPlansToVote;
 
   factory Voter.fromRow(Map<String, Object?> r) => Voter(
         id: r['id'] as String,
@@ -446,6 +459,10 @@ class Voter {
         pending: r['pending'] == 1,
         syncError: r['sync_error'] as String?,
         visitCount: (r['visit_count'] as int?) ?? 0,
+        latestVisitedAt: r['latest_visited_at'] == null ? null : DateTime.parse(r['latest_visited_at'] as String),
+        latestSupport: r['latest_support'] as String?,
+        latestPvcStatus: r['latest_pvc_status'] as String?,
+        latestPlansToVote: r['latest_plans_to_vote'] as String?,
       );
 
   /// What canvass_sync() takes for a voter added offline.
@@ -559,6 +576,23 @@ class Visit {
         'latitude': latitude,
         'longitude': longitude,
       };
+}
+
+/// Who to visit next at a polling unit, by each voter's latest visit: erims's
+/// lead lists, plus everyone visited.
+enum Lead {
+  all('All', 'Everyone on the list.'),
+  notReached('Not yet canvassed', 'Nobody has visited them yet.'),
+  persuadable('Persuadable', 'Undecided or leaning against at their latest visit: worth another conversation.'),
+  turnout('Turn out', 'Supporters with a PVC: remind them to vote on the day.'),
+  pvc('Need a PVC', "Supporters who haven't collected a PVC or aren't registered: help them get one."),
+  wavering('Unsure of voting', "Supporters who said they're unsure or won't vote."),
+  visited('Visited', 'Everyone visited at least once, by you or your team.');
+
+  const Lead(this.label, this.hint);
+
+  final String label;
+  final String hint;
 }
 
 /// The answers a canvasser can pick, as stored and as shown. The stored

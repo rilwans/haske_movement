@@ -72,6 +72,22 @@ class _VoterView extends StatelessWidget {
               ],
             ),
           ),
+          // Someone else on the team visited them since this phone last did.
+          if (voter.latestVisitedAt != null &&
+              (visits.isEmpty || voter.latestVisitedAt!.isAfter(visits.first.visitedAt))) ...[
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.groups),
+                title: Text('Latest visit by your team · ${dateTime(voter.latestVisitedAt!)}'),
+                subtitle: Text([
+                  'Support: ${Options.support[voter.latestSupport] ?? 'not asked'}',
+                  'PVC: ${Options.pvcStatus[voter.latestPvcStatus] ?? 'not asked'}',
+                  'Plans to vote: ${Options.plansToVote[voter.latestPlansToVote] ?? 'not asked'}',
+                ].join('\n')),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Text(
             visits.isEmpty ? 'No conversations yet' : 'Conversations',

@@ -10,26 +10,29 @@ import 'format.dart';
 import 'sync_bar.dart';
 import 'voter_screen.dart';
 
-/// A polling unit's voters, searchable, with who's already been talked to:
-/// a canvasser's home screen, or one a coordinator opened.
+/// A polling unit's voters, searchable, sorted into who to visit next by
+/// their latest visit: a canvasser's home screen, or one a coordinator opened.
 class VoterListScreen extends StatefulWidget {
-  const VoterListScreen({super.key, required this.pollingUnit, this.isHome = false});
+  const VoterListScreen({super.key, required this.pollingUnit, this.isHome = false, this.lead = Lead.all});
 
   final PollingUnit pollingUnit;
 
   /// The canvasser's home screen, with their account menu.
   final bool isHome;
 
+  /// The list to open on.
+  final Lead lead;
+
   @override
   State<VoterListScreen> createState() => _VoterListScreenState();
 }
 
-enum _Filter { all, notVisited, visited }
-
 class _VoterListScreenState extends State<VoterListScreen> {
   final _search = TextEditingController();
-  _Filter _filter = _Filter.all;
+  late Lead _lead = widget.lead;
   Future<List<Voter>>? _voters;
+  Future<Map<Lead, int>>? _counts;
+  int? _countedAt;
   Future<int>? _today;
   Object? _loadedFor;
 
@@ -40,18 +43,15 @@ class _VoterListScreenState extends State<VoterListScreen> {
   }
 
   void _loadIfChanged(CanvassService s) {
-    final key = (s.revision, _search.text, _filter);
+    final key = (s.revision, _search.text, _lead);
     if (key == _loadedFor) return;
     _loadedFor = key;
-    _voters = s.db.voters(
-      widget.pollingUnit.id,
-      search: _search.text,
-      visited: switch (_filter) {
-        _Filter.all => null,
-        _Filter.notVisited => false,
-        _Filter.visited => true,
-      },
-    );
+    _voters = s.db.voters(widget.pollingUnit.id, search: _search.text, lead: _lead);
+    // The counts change with the voters, not with the search or list chosen.
+    if (_countedAt != s.revision) {
+      _countedAt = s.revision;
+      _counts = s.db.leadCounts(widget.pollingUnit.id);
+    }
     final now = DateTime.now();
     _today = s.db.visitCountSince(DateTime(now.year, now.month, now.day), pollingUnitId: widget.pollingUnit.id);
   }
@@ -101,25 +101,36 @@ class _VoterListScreenState extends State<VoterListScreen> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SegmentedButton<_Filter>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(value: _Filter.all, label: Text('All')),
-                      ButtonSegment(value: _Filter.notVisited, label: Text('To visit')),
-                      ButtonSegment(value: _Filter.visited, label: Text('Visited')),
-                    ],
-                    selected: {_filter},
-                    onSelectionChanged: (v) => setState(() => _filter = v.first),
-                  ),
-                ),
-              ],
+          FutureBuilder<Map<Lead, int>>(
+            future: _counts,
+            builder: (context, snap) => SizedBox(
+              height: 48,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                children: [
+                  for (final l in Lead.values)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(snap.data == null ? l.label : '${l.label} (${formatCount(snap.data![l]!)})'),
+                        selected: _lead == l,
+                        showCheckmark: false,
+                        onSelected: (_) => setState(() => _lead = l),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
+          if (_lead != Lead.all)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_lead.hint, style: theme.textTheme.bodySmall),
+              ),
+            ),
           FutureBuilder<int>(
             future: _today,
             builder: (context, snap) => Padding(
@@ -145,10 +156,14 @@ class _VoterListScreenState extends State<VoterListScreen> {
                       padding: const EdgeInsets.all(32),
                       child: Text(
                         _search.text.isNotEmpty
-                            ? 'No voter matches "${_search.text}". Add them if you met someone new.'
-                            : _filter == _Filter.visited
-                                ? "You haven't recorded any conversations yet."
-                                : 'No voters here yet.',
+                            ? 'No voter matches "${_search.text}"${_lead == Lead.all ? '' : ' in this list'}. '
+                                  'Add them if you met someone new.'
+                            : switch (_lead) {
+                                Lead.all => 'No voters here yet.',
+                                Lead.notReached => 'Everyone here has been visited.',
+                                Lead.visited => 'Nobody here has been visited yet.',
+                                _ => 'Nobody here is in this list yet. It fills as voters are canvassed.',
+                              },
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -186,19 +201,30 @@ class _VoterTile extends StatelessWidget {
       if (voter.vin != null) 'VIN …${voter.vin!.substring(voter.vin!.length - 4)}',
       if (voter.addedLocally) 'Added by you',
     ].join(' · ');
+    final visited = voter.latestVisitedAt;
+    // Their latest answers, for what to say at the door.
+    final latest = visited == null
+        ? null
+        : [
+            Options.support[voter.latestSupport] ?? 'Support not asked',
+            ?Options.pvcStatus[voter.latestPvcStatus],
+            'visited ${timeAgo(visited)}',
+          ].join(' · ');
+    final subtitle = [if (details.isNotEmpty) details, ?latest].join('\n');
     return ListTile(
+      isThreeLine: details.isNotEmpty && latest != null,
       leading: CircleAvatar(
-        backgroundColor: voter.visitCount > 0 ? HaskeColors.green : Colors.grey.shade300,
-        foregroundColor: voter.visitCount > 0 ? Colors.white : Colors.grey.shade800,
-        child: voter.visitCount > 0 ? const Icon(Icons.check) : Text(voter.name.characters.first.toUpperCase()),
+        backgroundColor: visited != null ? HaskeColors.green : Colors.grey.shade300,
+        foregroundColor: visited != null ? Colors.white : Colors.grey.shade800,
+        child: visited != null ? const Icon(Icons.check) : Text(voter.name.characters.first.toUpperCase()),
       ),
       title: Text(voter.name),
-      subtitle: details.isEmpty ? null : Text(details),
+      subtitle: subtitle.isEmpty ? null : Text(subtitle),
       trailing: voter.syncError != null
           ? const Icon(Icons.error_outline, color: HaskeColors.red)
           : voter.pending
-              ? const Icon(Icons.cloud_upload_outlined)
-              : null,
+          ? const Icon(Icons.cloud_upload_outlined)
+          : null,
       onTap: () => openScreen(context, VoterScreen(voterId: voter.id)),
     );
   }

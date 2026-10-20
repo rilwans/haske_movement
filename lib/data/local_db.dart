@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -58,6 +58,7 @@ class LocalDb {
         await _createV2(db);
         await _createV3(db);
         await _createV4(db);
+        await _createV5(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -68,6 +69,7 @@ class LocalDb {
         }
         if (from < 3) await _createV3(db);
         if (from < 4) await _createV4(db);
+        if (from < 5) await _createV5(db);
       },
     );
     return LocalDb._(db, path);
@@ -121,6 +123,15 @@ class LocalDb {
       )''');
   }
 
+  /// Version 5: each voter's latest visit by anyone, from the server, for
+  /// the lists of who to visit next.
+  static Future<void> _createV5(Database db) async {
+    await db.execute('alter table voters add column last_visited_at text');
+    await db.execute('alter table voters add column last_support text');
+    await db.execute('alter table voters add column last_pvc_status text');
+    await db.execute('alter table voters add column last_plans_to_vote text');
+  }
+
   /// Closes and deletes this login's data, at sign-out.
   Future<void> destroy() async {
     await _db.close();
@@ -169,10 +180,41 @@ class LocalDb {
 
   // --- Voters -------------------------------------------------------------
 
-  /// Voters at [pollingUnitId] matching [search] (name, phone or VIN), with
-  /// how often they've been visited from this device.
-  Future<List<Voter>> voters(String pollingUnitId, {String search = '', bool? visited}) async {
-    final where = <String>['v.polling_unit_id = ?'];
+  /// Voters with how often they've been visited from this device, and their
+  /// latest visit by anyone: the server's, or one recorded here since.
+  static const _votersWithLatest = '''
+    select v.*,
+      (select count(*) from visits s where s.voter_id = v.id) as visit_count,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.visited_at else v.last_visited_at end
+        as latest_visited_at,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.support else v.last_support end
+        as latest_support,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.pvc_status else v.last_pvc_status end
+        as latest_pvc_status,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.plans_to_vote else v.last_plans_to_vote end
+        as latest_plans_to_vote
+    from voters v
+    left join visits l on l.id = (
+      select s.id from visits s where s.voter_id = v.id order by s.visited_at desc, s.id desc limit 1
+    )
+  ''';
+
+  static const _supporters = "('strong_support', 'leaning_support')";
+
+  /// Who's in each [Lead], over [_votersWithLatest], as erims's lead lists.
+  static const _leadWhere = {
+    Lead.all: '1 = 1',
+    Lead.notReached: 'v.latest_visited_at is null',
+    Lead.persuadable: "v.latest_support in ('undecided', 'leaning_against')",
+    Lead.turnout: "v.latest_support in $_supporters and v.latest_pvc_status = 'has_pvc'",
+    Lead.pvc: "v.latest_support in $_supporters and v.latest_pvc_status in ('registered_no_pvc', 'not_registered')",
+    Lead.wavering: "v.latest_support in $_supporters and v.latest_plans_to_vote in ('unsure', 'no')",
+    Lead.visited: 'v.latest_visited_at is not null',
+  };
+
+  /// Voters at [pollingUnitId] in [lead] matching [search] (name, phone or VIN).
+  Future<List<Voter>> voters(String pollingUnitId, {String search = '', Lead lead = Lead.all}) async {
+    final where = <String>['v.polling_unit_id = ?', _leadWhere[lead]!];
     final args = <Object?>[pollingUnitId];
     final q = search.trim();
     if (q.isNotEmpty) {
@@ -183,25 +225,26 @@ class LocalDb {
       where.add('(v.name like ? or v.vin like ? or v.phone like ? or v.whatsapp_number like ?)');
       args.addAll([like, like.toUpperCase(), phoneLike, phoneLike]);
     }
-    if (visited != null) {
-      where.add(visited ? 'visit_count > 0' : 'visit_count = 0');
-    }
     final rows = await _db.rawQuery('''
-      select * from (
-        select v.*, (select count(*) from visits s where s.voter_id = v.id) as visit_count
-        from voters v
-      ) v
+      select * from ($_votersWithLatest) v
       where ${where.join(' and ')}
       order by v.name collate nocase
     ''', args);
     return rows.map(Voter.fromRow).toList();
   }
 
+  /// How many voters at [pollingUnitId] are in each [Lead].
+  Future<Map<Lead, int>> leadCounts(String pollingUnitId) async {
+    final sums = [for (final l in Lead.values) 'sum(case when ${_leadWhere[l]} then 1 else 0 end) as lead_${l.name}'];
+    final rows = await _db.rawQuery(
+      'select ${sums.join(', ')} from ($_votersWithLatest) v where v.polling_unit_id = ?',
+      [pollingUnitId],
+    );
+    return {for (final l in Lead.values) l: (rows.first['lead_${l.name}'] as int?) ?? 0};
+  }
+
   Future<Voter?> voter(String id) async {
-    final rows = await _db.rawQuery('''
-      select v.*, (select count(*) from visits s where s.voter_id = v.id) as visit_count
-      from voters v where v.id = ?
-    ''', [id]);
+    final rows = await _db.rawQuery('select * from ($_votersWithLatest) v where v.id = ?', [id]);
     return rows.isEmpty ? null : Voter.fromRow(rows.first);
   }
 
@@ -244,6 +287,13 @@ class LocalDb {
               'email': r['email'],
               'gender': r['gender'],
               'birth_year': r['birth_year'],
+              // As the phone stores its own visits' times, so the two compare.
+              'last_visited_at': r['last_visited_at'] == null
+                  ? null
+                  : DateTime.parse(r['last_visited_at'] as String).toUtc().toIso8601String(),
+              'last_support': r['last_support'],
+              'last_pvc_status': r['last_pvc_status'],
+              'last_plans_to_vote': r['last_plans_to_vote'],
             },
             conflictAlgorithm: ConflictAlgorithm.ignore,
           );

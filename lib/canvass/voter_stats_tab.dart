@@ -5,6 +5,7 @@ import '../data/models.dart';
 import '../theme.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'voter_list_screen.dart';
 import 'ward_filter.dart';
 
 /// Men and women in the charts, as on erims's voter dashboard.
@@ -43,6 +44,9 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
   bool _loading = false;
   String? _error;
   _Sort _sort = _Sort.voters;
+
+  /// A polling unit being downloaded to open its voter lists.
+  String? _opening;
 
   /// Answers to a load that's been overtaken by another are dropped.
   int _request = 0;
@@ -105,6 +109,41 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
       _setArea(ward: a.id, unit: null);
     } else if (_pollingUnitId == null) {
       _choosePollingUnit(a.id);
+    }
+  }
+
+  /// A polling unit's voters on [lead], downloaded first if they aren't on
+  /// the phone, which needs internet.
+  Future<void> _openList(String pollingUnitId, Lead lead) async {
+    final s = CanvassScope.read(context);
+    final pu = s.profile!.pollingUnit(pollingUnitId);
+    if (pu == null || _opening != null) return;
+    if (!s.downloaded.contains(pu.id)) {
+      setState(() => _opening = pu.id);
+      try {
+        await s.downloadPollingUnit(pu.id);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text("Couldn't download ${pu.name}. ${CanvassService.describeError(e)}")));
+        }
+        return;
+      } finally {
+        if (mounted) setState(() => _opening = null);
+      }
+      if (!mounted) return;
+    }
+    await openScreen(context, VoterListScreen(pollingUnit: pu, lead: lead));
+  }
+
+  /// A "Where to focus" card: a ward opens a level down; a polling unit its
+  /// voters on the matching list.
+  void _openFocus(_Focus f) {
+    if (_stats?.level == 'polling_unit') {
+      _openList(f.area!.id, f.lead);
+    } else {
+      _open(f.area!);
     }
   }
 
@@ -233,9 +272,35 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
                     leading: Icon(f.icon, color: theme.colorScheme.primary),
                     title: Text(f.title),
                     subtitle: Text(f.text),
-                    trailing: f.area != null && _canOpen ? const Icon(Icons.chevron_right) : null,
-                    onTap: f.area != null && _canOpen ? () => _open(f.area!) : null,
+                    trailing: f.area != null && _opening == f.area!.id
+                        ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : f.area != null && _canOpen
+                        ? Icon(s.level == 'polling_unit' ? Icons.list_alt : Icons.chevron_right)
+                        : null,
+                    onTap: f.area != null && _canOpen ? () => _openFocus(f) : null,
                   ),
+              ],
+            ),
+          ),
+        if (_pollingUnitId != null)
+          _Section(
+            title: 'Who to visit here',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "This polling unit's voters, by their latest visit: not yet canvassed, persuadable, "
+                  'supporters to turn out, and supporters who need a PVC or are unsure of voting.',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: _opening == null ? () => _openList(_pollingUnitId!, Lead.notReached) : null,
+                  icon: _opening == _pollingUnitId
+                      ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.list_alt),
+                  label: const Text('Open voter lists'),
+                ),
               ],
             ),
           ),
@@ -324,6 +389,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
           '${unreached.name}: ${formatCount(unreached.voters - unreached.canvassed)} of '
               "${formatCount(unreached.voters)} voters haven't been visited.",
           unreached,
+          Lead.notReached,
         ),
       );
     }
@@ -335,6 +401,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
           'Most persuadable voters',
           '${persuadable.name}: ${formatCount(persuadable.persuadable)} canvassed voters are undecided or leaning against.',
           persuadable,
+          Lead.persuadable,
         ),
       );
     }
@@ -351,6 +418,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
           '${strongest.name}: ${percent(strongest.supporters, strongest.canvassed)}% of '
               '${formatCount(strongest.canvassed)} canvassed support us. Make sure they turn out.',
           strongest,
+          Lead.turnout,
         ),
       );
       if (weakest != strongest) {
@@ -361,6 +429,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
             '${weakest.name}: ${percent(weakest.supporters, weakest.canvassed)}% of '
                 '${formatCount(weakest.canvassed)} canvassed support us.',
             weakest,
+            Lead.persuadable,
           ),
         );
       }
@@ -374,6 +443,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
           '${unphoned.name}: ${formatCount(unphoned.voters - unphoned.reachable)} voters have no phone or '
               'WhatsApp number. Ask for them when canvassing.',
           unphoned,
+          Lead.all,
         ),
       );
     }
@@ -382,12 +452,15 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
 }
 
 class _Focus {
-  const _Focus(this.icon, this.title, this.text, this.area);
+  const _Focus(this.icon, this.title, this.text, this.area, this.lead);
 
   final IconData icon;
   final String title;
   final String text;
   final AreaStats? area;
+
+  /// The voter list a polling unit's card opens on.
+  final Lead lead;
 }
 
 enum _Sort {
