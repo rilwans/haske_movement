@@ -230,6 +230,52 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     return VoterStats.fromJson(json);
   }
 
+  /// The coordinator's team, or one ward's, with what each did since
+  /// [since] (ever, when null). Needs internet; throws a message otherwise.
+  Future<TeamActivity> fetchTeamActivity({String? wardId, DateTime? since}) async {
+    await _ensureSession();
+    final json = await _client.rpc('app_team_activity', params: {
+      'p_ward_id': wardId,
+      'p_since': since?.toUtc().toIso8601String(),
+    }) as Map<String, dynamic>;
+    json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
+    await db.saveCached(teamActivityKey(wardId, since), json);
+    return TeamActivity.fromJson(json);
+  }
+
+  /// Where [fetchTeamActivity] keeps its answer; periods are kept by day.
+  static String teamActivityKey(String? wardId, DateTime? since) =>
+      'team:${wardId ?? ''}:${since == null ? '' : '${since.year}-${since.month}-${since.day}'}';
+
+  /// Someone on the coordinator's team's latest visits. Needs internet.
+  Future<List<TeamVisit>> fetchPersonVisits(TeamMember m) async {
+    await _ensureSession();
+    final rows = await _client.rpc('app_person_visits', params: {'p_kind': m.kind, 'p_id': m.id}) as List;
+    return [for (final r in rows) TeamVisit.fromJson(r as Map<String, dynamic>)];
+  }
+
+  /// The wards in the coordinator's area and their targets. Needs internet.
+  Future<WardTargets> fetchTargets() async {
+    await _ensureSession();
+    final json = await _client.rpc('app_ward_targets') as Map<String, dynamic>;
+    json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
+    await db.saveCached('targets', json);
+    return WardTargets.fromJson(json);
+  }
+
+  /// An LGA coordinator sets a ward's target from today, or with no
+  /// [percent] removes it. Needs internet.
+  Future<void> setWardTarget(String wardId, {int? percent, DateTime? dueOn}) async {
+    await _ensureSession();
+    await _client.rpc('set_ward_target', params: {
+      'p_ward_id': wardId,
+      'p_percent': percent,
+      'p_due_on': dueOn == null
+          ? null
+          : '${dueOn.year}-${dueOn.month.toString().padLeft(2, '0')}-${dueOn.day.toString().padLeft(2, '0')}',
+    });
+  }
+
   static List<Map<String, dynamic>> _results(Object? list) =>
       ((list as List?) ?? const []).cast<Map<String, dynamic>>();
 

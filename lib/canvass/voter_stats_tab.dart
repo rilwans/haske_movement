@@ -5,6 +5,7 @@ import '../data/models.dart';
 import '../theme.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'panels.dart';
 import 'voter_list_screen.dart';
 import 'ward_filter.dart';
 
@@ -177,7 +178,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
           const SizedBox(height: 8),
           SizedBox(height: 4, child: _loading ? const LinearProgressIndicator() : null),
           if (_error != null && stats == null)
-            _Notice(
+            Notice(
               icon: Icons.error_outline,
               color: HaskeColors.red,
               title: "Couldn't load the voter figures",
@@ -185,7 +186,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
               action: TextButton(onPressed: _load, child: const Text('Retry')),
             )
           else if (_error != null)
-            _Notice(
+            Notice(
               icon: Icons.cloud_off,
               color: Colors.grey.shade700,
               title: 'Showing the figures from ${timeAgo(stats!.fetchedAt)}',
@@ -255,14 +256,14 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
         ],
       ),
       if (s.voters == 0)
-        const _Notice(
+        const Notice(
           icon: Icons.groups_outlined,
           title: 'No voters in this area yet',
           text: 'Figures appear once voters are added or imported.',
         )
       else ...[
         if (_focus(s).isNotEmpty)
-          _Section(
+          Panel(
             title: 'Where to focus',
             child: Column(
               children: [
@@ -283,7 +284,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
             ),
           ),
         if (_pollingUnitId != null)
-          _Section(
+          Panel(
             title: 'Who to visit here',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -304,15 +305,15 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
               ],
             ),
           ),
-        _Section(
+        Panel(
           title: 'Gender',
           child: _GenderChart(stats: s),
         ),
-        _Section(
+        Panel(
           title: 'Age',
           child: _AgeChart(stats: s),
         ),
-        _Section(
+        Panel(
           title: 'Canvassing answers',
           child: s.canvassed == 0
               ? const Text('Nobody in this area has been canvassed yet.')
@@ -347,7 +348,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
   Widget _areasSection(BuildContext context, VoterStats s) {
     final areas = [...s.areas]..sort(_sort.compare);
     final most = s.areas.fold<int>(0, (m, a) => a.voters > m ? a.voters : m);
-    return _Section(
+    return Panel(
       title: s.level == 'ward' ? 'By ward' : 'By polling unit',
       action: PopupMenuButton<_Sort>(
         tooltip: 'Sort',
@@ -563,29 +564,6 @@ class _Filters extends StatelessWidget {
   }
 }
 
-class _Notice extends StatelessWidget {
-  const _Notice({required this.icon, required this.title, required this.text, this.color, this.action});
-
-  final IconData icon;
-  final String title;
-  final String text;
-  final Color? color;
-  final Widget? action;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: ListTile(
-        leading: Icon(icon, color: color),
-        title: Text(title),
-        subtitle: Text(text),
-        trailing: action,
-      ),
-    );
-  }
-}
-
 class _Kpi extends StatelessWidget {
   const _Kpi({required this.label, required this.value, required this.note});
 
@@ -608,37 +586,6 @@ class _Kpi extends StatelessWidget {
             Text(value, style: t.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
             const Spacer(),
             Text(note, style: t.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child, this.action});
-
-  final String title;
-  final Widget child;
-  final Widget? action;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(top: 12),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium)),
-                ?action,
-              ],
-            ),
-            const SizedBox(height: 12),
-            child,
           ],
         ),
       ),

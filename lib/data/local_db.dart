@@ -178,6 +178,14 @@ class LocalDb {
   Future<void> saveStats(String? wardId, String? pollingUnitId, Map<String, dynamic> json) =>
       _setMeta(_statsKey(wardId, pollingUnitId), jsonEncode(json));
 
+  /// Something else fetched from the server, kept under [key] for offline.
+  Future<Map<String, dynamic>?> cached(String key) async {
+    final json = await _meta('cache:$key');
+    return json == null ? null : jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  Future<void> saveCached(String key, Map<String, dynamic> json) => _setMeta('cache:$key', jsonEncode(json));
+
   // --- Voters -------------------------------------------------------------
 
   /// Voters with how often they've been visited from this device, and their

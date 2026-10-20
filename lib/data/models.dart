@@ -637,3 +637,242 @@ class Options {
     'other': 'Other',
   };
 }
+
+/// Someone a coordinator answers for, with what they've done in a period,
+/// from app_team_activity().
+class TeamMember {
+  const TeamMember({
+    required this.kind,
+    required this.id,
+    required this.name,
+    required this.phone,
+    required this.area,
+    required this.wardId,
+    required this.hasLogin,
+    required this.isMe,
+    required this.visits,
+    required this.voters,
+    required this.units,
+    required this.far,
+    required this.unlocated,
+    required this.rushed,
+    required this.lastVisitAt,
+  });
+
+  /// 'canvasser', 'ward_coordinator' or 'lga_coordinator'.
+  final String kind;
+  final String id;
+  final String name;
+  final String phone;
+
+  /// Their polling unit, ward or LGA.
+  final String area;
+  final String? wardId;
+  final bool hasLogin;
+  final bool isMe;
+  final int visits;
+  final int voters;
+  final int units;
+
+  /// Visits far from the polling unit, recorded without the phone's
+  /// location, or within a minute of their previous one.
+  final int far;
+  final int unlocated;
+  final int rushed;
+
+  /// Their latest visit ever, whatever the period.
+  final DateTime? lastVisitAt;
+
+  int get flagged => far + unlocated + rushed;
+
+  String get kindLabel => switch (kind) {
+        'ward_coordinator' => 'Ward coordinator',
+        'lga_coordinator' => 'LGA coordinator',
+        _ => 'Canvasser',
+      };
+
+  factory TeamMember.fromJson(Map<String, dynamic> j) => TeamMember(
+        kind: j['kind'] as String,
+        id: j['id'] as String,
+        name: j['name'] as String,
+        phone: j['phone'] as String,
+        area: j['area'] as String,
+        wardId: j['ward_id'] as String?,
+        hasLogin: j['has_login'] == true,
+        isMe: j['is_me'] == true,
+        visits: _int(j['visits']),
+        voters: _int(j['voters']),
+        units: _int(j['units']),
+        far: _int(j['far']),
+        unlocated: _int(j['unlocated']),
+        rushed: _int(j['rushed']),
+        lastVisitAt: j['last_visit_at'] == null ? null : DateTime.parse(j['last_visit_at'] as String),
+      );
+}
+
+class TeamActivity {
+  const TeamActivity({required this.farKm, required this.people, required this.fetchedAt});
+
+  /// How far from the polling unit a visit counts as far.
+  final int farKm;
+  final List<TeamMember> people;
+  final DateTime fetchedAt;
+
+  factory TeamActivity.fromJson(Map<String, dynamic> j) => TeamActivity(
+        farKm: _int(j['far_km']),
+        people: [for (final p in (j['people'] as List)) TeamMember.fromJson(p as Map<String, dynamic>)],
+        fetchedAt: j['fetched_at'] == null ? DateTime.now() : DateTime.parse(j['fetched_at'] as String),
+      );
+}
+
+/// One of a team member's visits, with erims's checks, from app_person_visits().
+class TeamVisit {
+  const TeamVisit({
+    required this.visitedAt,
+    required this.voterName,
+    required this.pollingUnit,
+    this.support,
+    this.pvcStatus,
+    this.plansToVote,
+    required this.located,
+    this.distanceKm,
+    required this.rushed,
+  });
+
+  final DateTime visitedAt;
+  final String voterName;
+  final String pollingUnit;
+  final String? support;
+  final String? pvcStatus;
+  final String? plansToVote;
+  final bool located;
+
+  /// From the polling unit, when both are known.
+  final double? distanceKm;
+  final bool rushed;
+
+  factory TeamVisit.fromJson(Map<String, dynamic> j) => TeamVisit(
+        visitedAt: DateTime.parse(j['visited_at'] as String),
+        voterName: j['voter_name'] as String,
+        pollingUnit: j['polling_unit'] as String,
+        support: j['support'] as String?,
+        pvcStatus: j['pvc_status'] as String?,
+        plansToVote: j['plans_to_vote'] as String?,
+        located: j['located'] == true,
+        distanceKm: (j['distance_km'] as num?)?.toDouble(),
+        rushed: j['rushed'] == true,
+      );
+}
+
+/// The wards in a coordinator's area and their targets, from app_ward_targets().
+class WardTargets {
+  const WardTargets({required this.canSet, required this.recentDays, required this.wards, required this.fetchedAt});
+
+  /// LGA coordinators set their wards' targets.
+  final bool canSet;
+
+  /// The days [WardProgress.recent] counts.
+  final int recentDays;
+  final List<WardProgress> wards;
+  final DateTime fetchedAt;
+
+  factory WardTargets.fromJson(Map<String, dynamic> j) {
+    final days = _int(j['recent_days']);
+    return WardTargets(
+      canSet: j['can_set'] == true,
+      recentDays: days,
+      wards: [for (final w in (j['wards'] as List)) WardProgress.fromJson(w as Map<String, dynamic>, days)],
+      fetchedAt: j['fetched_at'] == null ? DateTime.now() : DateTime.parse(j['fetched_at'] as String),
+    );
+  }
+}
+
+enum TargetStatus { none, done, onPace, behind, missed }
+
+/// A ward's canvassing against its target, if it has one.
+class WardProgress {
+  const WardProgress({
+    required this.id,
+    required this.name,
+    required this.voters,
+    required this.canvassed,
+    required this.recent,
+    required this.recentDays,
+    this.target,
+  });
+
+  final String id;
+  final String name;
+  final int voters;
+
+  /// Voters canvassed by anyone, ever.
+  final int canvassed;
+
+  /// Voters canvassed for the first time in the last [recentDays] days.
+  final int recent;
+  final int recentDays;
+  final WardTarget? target;
+
+  /// Voters to canvass to reach the target.
+  int? get targetCount => target == null ? null : (voters * target!.percent / 100).ceil();
+
+  /// Voters there'd be canvassed by [today] going evenly from when the
+  /// target was set to its date.
+  int? expectedBy(DateTime today) {
+    final t = target, goal = targetCount;
+    if (t == null || goal == null) return null;
+    final total = t.dueOn.difference(t.startsOn).inDays;
+    if (total <= 0 || goal <= t.startCanvassed) return goal;
+    final elapsed = _day(today).difference(t.startsOn).inDays.clamp(0, total);
+    return (t.startCanvassed + (goal - t.startCanvassed) * elapsed / total).round();
+  }
+
+  TargetStatus statusOn(DateTime today) {
+    final t = target, goal = targetCount;
+    if (t == null || goal == null) return TargetStatus.none;
+    if (canvassed >= goal) return TargetStatus.done;
+    if (_day(today).isAfter(t.dueOn)) return TargetStatus.missed;
+    return canvassed >= expectedBy(today)! ? TargetStatus.onPace : TargetStatus.behind;
+  }
+
+  /// When the target would be reached at the last [recentDays] days' rate;
+  /// null when it's reached or nobody new has been canvassed lately.
+  DateTime? projectedOn(DateTime today) {
+    final goal = targetCount;
+    if (goal == null || canvassed >= goal || recent == 0) return null;
+    final perDay = recent / recentDays;
+    return _day(today).add(Duration(days: ((goal - canvassed) / perDay).ceil()));
+  }
+
+  factory WardProgress.fromJson(Map<String, dynamic> j, int recentDays) => WardProgress(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        voters: _int(j['voters']),
+        canvassed: _int(j['canvassed']),
+        recent: _int(j['recent']),
+        recentDays: recentDays,
+        target: j['target'] == null ? null : WardTarget.fromJson(j['target'] as Map<String, dynamic>),
+      );
+}
+
+class WardTarget {
+  const WardTarget({required this.percent, required this.dueOn, required this.startsOn, required this.startCanvassed});
+
+  /// Of the ward's voters on the list.
+  final int percent;
+  final DateTime dueOn;
+
+  /// When it was set, and how many were canvassed then.
+  final DateTime startsOn;
+  final int startCanvassed;
+
+  factory WardTarget.fromJson(Map<String, dynamic> j) => WardTarget(
+        percent: _int(j['percent']),
+        dueOn: DateTime.parse(j['due_on'] as String),
+        startsOn: DateTime.parse(j['starts_on'] as String),
+        startCanvassed: _int(j['start_canvassed']),
+      );
+}
+
+/// Midnight starting [at]'s day, for counting whole days.
+DateTime _day(DateTime at) => DateTime(at.year, at.month, at.day);
