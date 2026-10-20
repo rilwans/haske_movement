@@ -103,6 +103,12 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     await _changed();
   }
 
+  /// A ward coordinator an LGA coordinator added, sent with the next sync.
+  Future<void> addWardCoordinator(NewWardCoordinator c) async {
+    await db.addWardCoordinator(c);
+    await _changed();
+  }
+
   Future<void> addVoter(Voter v) async {
     await db.addVoter(v);
     await _changed();
@@ -162,6 +168,13 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _push() async {
+    final wardCoordinators = await db.pendingWardCoordinators();
+    if (wardCoordinators.isNotEmpty) {
+      final res = await _client.rpc('onboard_ward_coordinators', params: {
+        'items': wardCoordinators.map((c) => c.toSyncJson()).toList(),
+      });
+      await db.markOnboardedSynced('ward_coordinators', _results(res));
+    }
     final canvassers = await db.pendingCanvassers();
     final voters = await db.pendingVoters();
     final visits = await db.unsyncedVisits();
@@ -180,24 +193,41 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
           'visits': chunk.map((v) => v.toSyncJson()).toList(),
         },
       }) as Map<String, dynamic>;
-      await db.markCanvassersSynced(_results(res['canvassers']));
+      await db.markOnboardedSynced('canvassers', _results(res['canvassers']));
       await db.markVotersSynced(_results(res['voters']));
       await db.markVisitsSynced(_results(res['visits']));
     }
   }
 
-  /// Logins for the canvassers a coordinator onboarded: canvass_sync()
-  /// makes the canvasser, and erims's canvasser-logins function their login.
+  /// Logins for the canvassers and ward coordinators a coordinator onboarded:
+  /// canvass_sync() or onboard_ward_coordinators() makes the person, and
+  /// erims's canvasser-logins function their login.
   Future<void> _makeLogins() async {
     if (profile?.isCoordinator != true) return;
-    final ids = await db.canvassersAwaitingLogin();
-    for (var i = 0; i < ids.length; i += 100) {
-      final res = await _client.functions.invoke(
-        'canvasser-logins',
-        body: {'action': 'onboard', 'ids': ids.skip(i).take(100).toList()},
-      );
-      await db.markLogins(_results((res.data as Map<String, dynamic>)['canvassers']));
+    for (final team in ['canvassers', 'ward_coordinators']) {
+      final ids = await db.awaitingLogin(team);
+      for (var i = 0; i < ids.length; i += 100) {
+        final res = await _client.functions.invoke(
+          'canvasser-logins',
+          body: {'action': 'onboard', 'team': team, 'ids': ids.skip(i).take(100).toList()},
+        );
+        await db.markLogins(team, _results((res.data as Map<String, dynamic>)[team]));
+      }
     }
+  }
+
+  /// The voter figures for the coordinator's area, or [wardId] or
+  /// [pollingUnitId] in it, kept on the phone for when there's no internet.
+  /// Needs internet; throws a message to show otherwise.
+  Future<VoterStats> fetchStats({String? wardId, String? pollingUnitId}) async {
+    await _ensureSession();
+    final json = await _client.rpc('app_voter_stats', params: {
+      'p_ward_id': wardId,
+      'p_polling_unit_id': pollingUnitId,
+    }) as Map<String, dynamic>;
+    json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
+    await db.saveStats(wardId, pollingUnitId, json);
+    return VoterStats.fromJson(json);
   }
 
   static List<Map<String, dynamic>> _results(Object? list) =>

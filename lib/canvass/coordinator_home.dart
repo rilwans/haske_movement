@@ -10,10 +10,12 @@ import 'format.dart';
 import 'onboard_canvasser_screen.dart';
 import 'sync_bar.dart';
 import 'voter_list_screen.dart';
+import 'voter_stats_tab.dart';
 import 'ward_filter.dart';
 
 /// A ward or LGA coordinator's home: the polling units in their area to
-/// canvass, and the canvassers they've onboarded.
+/// canvass, the voter figures for it, and the canvassers (and, for an LGA
+/// coordinator, ward coordinators) they've onboarded.
 class CoordinatorHome extends StatefulWidget {
   const CoordinatorHome({super.key});
 
@@ -23,6 +25,12 @@ class CoordinatorHome extends StatefulWidget {
 
 class _CoordinatorHomeState extends State<CoordinatorHome> {
   int _tab = 0;
+
+  /// On the team tab, whether an LGA coordinator is looking at ward coordinators.
+  bool _wardCoordinators = false;
+
+  /// The stats tab, once opened, keeps its area and figures across tabs.
+  bool _statsOpened = false;
 
   @override
   Widget build(BuildContext context) {
@@ -43,33 +51,86 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
         children: [
           const SyncBar(),
           Expanded(
-            child: _tab == 0
-                ? const _PollingUnitsTab()
-                : const _CanvassersTab(),
+            child: IndexedStack(
+              index: _tab,
+              children: [
+                const _PollingUnitsTab(),
+                _statsOpened ? const VoterStatsTab() : const SizedBox.shrink(),
+                Column(
+                  children: [
+                    if (p.isLgaCoordinator)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment(
+                                value: false,
+                                label: Text('Canvassers'),
+                              ),
+                              ButtonSegment(
+                                value: true,
+                                label: Text('Ward coordinators'),
+                              ),
+                            ],
+                            selected: {_wardCoordinators},
+                            showSelectedIcon: false,
+                            onSelectionChanged: (v) =>
+                                setState(() => _wardCoordinators = v.first),
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: p.isLgaCoordinator && _wardCoordinators
+                          ? const _WardCoordinatorsTab()
+                          : const _CanvassersTab(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
-      floatingActionButton: _tab == 1
-          ? FloatingActionButton.extended(
-              onPressed: () =>
-                  openScreen(context, const OnboardCanvasserScreen()),
-              icon: const Icon(Icons.person_add),
-              label: const Text('Onboard canvasser'),
-            )
+      floatingActionButton: _tab == 2
+          ? p.isLgaCoordinator && _wardCoordinators
+                ? FloatingActionButton.extended(
+                    onPressed: () => openScreen(
+                      context,
+                      const OnboardCanvasserScreen.wardCoordinator(),
+                    ),
+                    icon: const Icon(Icons.person_add),
+                    label: const Text('Add ward coordinator'),
+                  )
+                : FloatingActionButton.extended(
+                    onPressed: () =>
+                        openScreen(context, const OnboardCanvasserScreen()),
+                    icon: const Icon(Icons.person_add),
+                    label: const Text('Onboard canvasser'),
+                  )
           : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(
+        onDestinationSelected: (i) => setState(() {
+          _tab = i;
+          if (i == 1) _statsOpened = true;
+        }),
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.how_to_vote_outlined),
             selectedIcon: Icon(Icons.how_to_vote),
             label: 'Canvass',
           ),
+          const NavigationDestination(
+            icon: Icon(Icons.insights_outlined),
+            selectedIcon: Icon(Icons.insights),
+            label: 'Stats',
+          ),
           NavigationDestination(
-            icon: Icon(Icons.groups_outlined),
-            selectedIcon: Icon(Icons.groups),
-            label: 'Canvassers',
+            icon: const Icon(Icons.groups_outlined),
+            selectedIcon: const Icon(Icons.groups),
+            label: p.isLgaCoordinator ? 'Team' : 'Canvassers',
           ),
         ],
       ),
@@ -234,44 +295,122 @@ class _CanvassersTab extends StatelessWidget {
           itemBuilder: (context, i) {
             final c = list[i];
             final pu = s.profile!.pollingUnit(c.pollingUnitId);
-            final (
-              IconData icon,
-              Color color,
-              String status,
-            ) = c.syncError != null
-                ? (
-                    Icons.error_outline,
-                    HaskeColors.red,
-                    '${c.pending ? 'Not accepted' : 'No login yet'}: ${c.syncError}',
-                  )
-                : c.pending
-                ? (
-                    Icons.cloud_upload_outlined,
-                    Colors.orange.shade800,
-                    'Waiting to send. They can sign in once it is.',
-                  )
-                : c.login != 'made'
-                ? (
-                    Icons.hourglass_top,
-                    Colors.orange.shade800,
-                    'Sent. Their login is made at the next sync.',
-                  )
-                : (
-                    Icons.check_circle,
-                    HaskeColors.green,
-                    'Can sign in with ${displayPhone(c.phone)} and ${Config.defaultPassword}',
-                  );
-            return ListTile(
-              isThreeLine: true,
-              leading: Icon(icon, color: color),
-              title: Text(c.fullName),
-              subtitle: Text(
-                '${pu?.name ?? 'Polling unit'} · ${dateTime(c.createdAt)}\n$status',
-              ),
+            return _OnboardedTile(
+              name: c.fullName,
+              where: pu?.name ?? 'Polling unit',
+              createdAt: c.createdAt,
+              phone: c.phone,
+              pending: c.pending,
+              syncError: c.syncError,
+              login: c.login,
             );
           },
         );
       },
+    );
+  }
+}
+
+/// The ward coordinators an LGA coordinator added from this phone, and
+/// whether they can sign in yet.
+class _WardCoordinatorsTab extends StatelessWidget {
+  const _WardCoordinatorsTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = CanvassScope.of(context);
+    return FutureBuilder<List<NewWardCoordinator>>(
+      key: ValueKey(s.revision),
+      future: s.db.wardCoordinators(),
+      builder: (context, snap) {
+        final list = snap.data;
+        if (list == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (list.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text(
+                "Ward coordinators you add appear here. They can onboard canvassers in their ward "
+                "once they sign in. You can add them offline; they can sign in once it's sent.",
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.only(bottom: 88),
+          itemCount: list.length,
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemBuilder: (context, i) {
+            final c = list[i];
+            return _OnboardedTile(
+              name: c.fullName,
+              where: '${c.wardName} ward',
+              createdAt: c.createdAt,
+              phone: c.phone,
+              pending: c.pending,
+              syncError: c.syncError,
+              login: c.login,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// Someone a coordinator onboarded, with where their login is.
+class _OnboardedTile extends StatelessWidget {
+  const _OnboardedTile({
+    required this.name,
+    required this.where,
+    required this.createdAt,
+    required this.phone,
+    required this.pending,
+    required this.syncError,
+    required this.login,
+  });
+
+  final String name;
+  final String where;
+  final DateTime createdAt;
+  final String phone;
+  final bool pending;
+  final String? syncError;
+  final String? login;
+
+  @override
+  Widget build(BuildContext context) {
+    final (IconData icon, Color color, String status) = syncError != null
+        ? (
+            Icons.error_outline,
+            HaskeColors.red,
+            '${pending ? 'Not accepted' : 'No login yet'}: $syncError',
+          )
+        : pending
+        ? (
+            Icons.cloud_upload_outlined,
+            Colors.orange.shade800,
+            'Waiting to send. They can sign in once it is.',
+          )
+        : login != 'made'
+        ? (
+            Icons.hourglass_top,
+            Colors.orange.shade800,
+            'Sent. Their login is made at the next sync.',
+          )
+        : (
+            Icons.check_circle,
+            HaskeColors.green,
+            'Can sign in with ${displayPhone(phone)} and ${Config.defaultPassword}',
+          );
+    return ListTile(
+      isThreeLine: true,
+      leading: Icon(icon, color: color),
+      title: Text(name),
+      subtitle: Text('$where · ${dateTime(createdAt)}\n$status'),
     );
   }
 }

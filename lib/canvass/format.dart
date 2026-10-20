@@ -45,3 +45,17 @@ String? birthYearError(String? input) {
   final now = DateTime.now().year;
   return y != null && y >= 1900 && y <= now ? null : 'Enter a year from 1900 to $now, or leave it blank';
 }
+
+/// 12345 → 12,345.
+String formatCount(int n) {
+  final s = n.abs().toString();
+  final b = StringBuffer(n < 0 ? '-' : '');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+    b.write(s[i]);
+  }
+  return b.toString();
+}
+
+/// [part] as a whole percentage of [whole], or null when there's no whole.
+int? percent(int part, int whole) => whole == 0 ? null : (part * 100 / whole).round();

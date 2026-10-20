@@ -7,11 +7,16 @@ import '../data/models.dart';
 import 'canvass_shell.dart';
 import 'ward_filter.dart';
 
-/// A coordinator adds a canvasser at a polling unit in their area. Saved on
-/// the phone; erims makes the canvasser and their login when it's sent, and
-/// records this coordinator as who onboarded them.
+/// A coordinator adds a canvasser at a polling unit in their area, or an LGA
+/// coordinator a ward coordinator for a ward in theirs. Saved on the phone;
+/// erims makes the person and their login when it's sent, and records this
+/// coordinator as who onboarded them.
 class OnboardCanvasserScreen extends StatefulWidget {
-  const OnboardCanvasserScreen({super.key});
+  const OnboardCanvasserScreen({super.key}) : wardCoordinator = false;
+
+  const OnboardCanvasserScreen.wardCoordinator({super.key}) : wardCoordinator = true;
+
+  final bool wardCoordinator;
 
   @override
   State<OnboardCanvasserScreen> createState() => _OnboardCanvasserScreenState();
@@ -25,7 +30,10 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
   final _whatsapp = TextEditingController();
   final _email = TextEditingController();
   PollingUnit? _pollingUnit;
+  Ward? _ward;
   bool _saving = false;
+
+  bool get _forWard => widget.wardCoordinator;
 
   @override
   void dispose() {
@@ -41,16 +49,27 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => _PollingUnitPicker(units: units),
+      builder: (context) => PollingUnitPicker(units: units),
     );
     if (picked != null) setState(() => _pollingUnit = picked);
+  }
+
+  Future<void> _pickWard() async {
+    final wards = CanvassScope.read(context).profile!.wards;
+    final picked = await showModalBottomSheet<Ward>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => WardPicker(wards: wards),
+    );
+    if (picked != null) setState(() => _ward = picked);
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
     final service = CanvassScope.read(context);
     final phone = toE164(_phone.text)!;
-    if (await service.db.hasCanvasserPhone(phone)) {
+    if (await service.db.hasOnboardedPhone(phone)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('You already onboarded someone with this phone number.')),
@@ -59,16 +78,30 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
     }
     setState(() => _saving = true);
     final email = _email.text.trim().toLowerCase();
-    await service.addCanvasser(NewCanvasser(
-      id: const Uuid().v4(),
-      firstName: _firstName.text.trim(),
-      lastName: _lastName.text.trim(),
-      phone: phone,
-      whatsappNumber: toE164(_whatsapp.text),
-      email: email.isEmpty ? null : email,
-      pollingUnitId: _pollingUnit!.id,
-      createdAt: DateTime.now(),
-    ));
+    if (_forWard) {
+      await service.addWardCoordinator(NewWardCoordinator(
+        id: const Uuid().v4(),
+        firstName: _firstName.text.trim(),
+        lastName: _lastName.text.trim(),
+        phone: phone,
+        whatsappNumber: toE164(_whatsapp.text),
+        email: email.isEmpty ? null : email,
+        wardId: _ward!.id,
+        wardName: _ward!.name,
+        createdAt: DateTime.now(),
+      ));
+    } else {
+      await service.addCanvasser(NewCanvasser(
+        id: const Uuid().v4(),
+        firstName: _firstName.text.trim(),
+        lastName: _lastName.text.trim(),
+        phone: phone,
+        whatsappNumber: toE164(_whatsapp.text),
+        email: email.isEmpty ? null : email,
+        pollingUnitId: _pollingUnit!.id,
+        createdAt: DateTime.now(),
+      ));
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('${_firstName.text.trim()} saved. They can sign in once it has been sent.'),
@@ -80,7 +113,7 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Onboard canvasser')),
+      appBar: AppBar(title: Text(_forWard ? 'Add ward coordinator' : 'Onboard canvasser')),
       body: Form(
         key: _form,
         child: ListView(
@@ -129,91 +162,56 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
                   : 'Enter a valid email, or leave it blank',
             ),
             const SizedBox(height: 12),
-            FormField<PollingUnit>(
-              validator: (_) => _pollingUnit == null ? 'Choose where they will canvass' : null,
-              builder: (field) => InkWell(
-                onTap: () async {
-                  await _pickPollingUnit();
-                  field.didChange(_pollingUnit);
-                },
-                child: InputDecorator(
-                  decoration: InputDecoration(
-                    labelText: 'Polling unit',
-                    prefixIcon: const Icon(Icons.place),
-                    suffixIcon: const Icon(Icons.arrow_drop_down),
-                    errorText: field.errorText,
+            if (_forWard)
+              FormField<Ward>(
+                validator: (_) => _ward == null ? 'Choose the ward they will coordinate' : null,
+                builder: (field) => InkWell(
+                  onTap: () async {
+                    await _pickWard();
+                    field.didChange(_ward);
+                  },
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Ward',
+                      prefixIcon: const Icon(Icons.map_outlined),
+                      suffixIcon: const Icon(Icons.arrow_drop_down),
+                      errorText: field.errorText,
+                    ),
+                    child: Text(_ward == null ? 'Choose' : _ward!.name),
                   ),
-                  child: Text(_pollingUnit == null ? 'Choose' : '${_pollingUnit!.name} (${_pollingUnit!.code})'),
+                ),
+              )
+            else
+              FormField<PollingUnit>(
+                validator: (_) => _pollingUnit == null ? 'Choose where they will canvass' : null,
+                builder: (field) => InkWell(
+                  onTap: () async {
+                    await _pickPollingUnit();
+                    field.didChange(_pollingUnit);
+                  },
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Polling unit',
+                      prefixIcon: const Icon(Icons.place),
+                      suffixIcon: const Icon(Icons.arrow_drop_down),
+                      errorText: field.errorText,
+                    ),
+                    child: Text(_pollingUnit == null ? 'Choose' : '${_pollingUnit!.name} (${_pollingUnit!.code})'),
+                  ),
                 ),
               ),
-            ),
             const SizedBox(height: 24),
             FilledButton(onPressed: _saving ? null : _save, child: const Text('Save')),
             const SizedBox(height: 8),
             Text(
               'Saved on this phone and sent when you have internet. They then sign in with '
-              'their phone number and the password ${Config.defaultPassword}, and choose their own.',
+              'their phone number and the password ${Config.defaultPassword}, and choose their own.'
+              '${_forWard ? ' They can then onboard canvassers in their ward.' : ''}',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall,
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _PollingUnitPicker extends StatefulWidget {
-  const _PollingUnitPicker({required this.units});
-
-  final List<PollingUnit> units;
-
-  @override
-  State<_PollingUnitPicker> createState() => _PollingUnitPickerState();
-}
-
-class _PollingUnitPickerState extends State<_PollingUnitPicker> {
-  String _q = '';
-  String? _ward;
-
-  @override
-  Widget build(BuildContext context) {
-    final units = filterPollingUnits(widget.units, ward: _ward, search: _q);
-    return SizedBox(
-      height: MediaQuery.of(context).size.height * 0.8,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: TextField(
-              autofocus: true,
-              onChanged: (v) => setState(() => _q = v),
-              decoration: const InputDecoration(
-                hintText: 'Search polling units',
-                prefixIcon: Icon(Icons.search),
-                isDense: true,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: WardFilter(
-              units: widget.units,
-              value: _ward,
-              onChanged: (w) => setState(() => _ward = w),
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: units.length,
-              itemBuilder: (context, i) => ListTile(
-                title: Text(units[i].name),
-                subtitle: Text('${units[i].code} · ${units[i].wardName}'),
-                onTap: () => Navigator.pop(context, units[i]),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

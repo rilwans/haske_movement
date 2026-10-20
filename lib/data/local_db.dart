@@ -7,8 +7,8 @@ import 'models.dart';
 
 /// The signed-in person's data on the device: the voters of the polling
 /// units they've downloaded, the voters they added, the visits they recorded
-/// and (coordinators) the canvassers they onboarded, so all of it works with
-/// no internet. Each login gets its own file, deleted when they sign out.
+/// and (coordinators) the canvassers and ward coordinators they onboarded,
+/// so all of it works with no internet. Each login gets its own file, deleted when they sign out.
 class LocalDb {
   LocalDb._(this._db, this._path);
 
@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -57,6 +57,7 @@ class LocalDb {
         await db.execute('create index visits_synced on visits (synced)');
         await _createV2(db);
         await _createV3(db);
+        await _createV4(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -66,6 +67,7 @@ class LocalDb {
           await _createV2(db);
         }
         if (from < 3) await _createV3(db);
+        if (from < 4) await _createV4(db);
       },
     );
     return LocalDb._(db, path);
@@ -100,6 +102,25 @@ class LocalDb {
     await db.execute('alter table visits add column reported_birth_year integer');
   }
 
+  /// Version 4: the ward coordinators LGA coordinators add.
+  static Future<void> _createV4(Database db) async {
+    await db.execute('''
+      create table ward_coordinators (
+        id text primary key,
+        first_name text not null,
+        last_name text not null,
+        phone text not null,
+        whatsapp_number text,
+        email text,
+        ward_id text not null,
+        ward_name text not null,
+        created_at text not null,
+        pending integer not null default 1,
+        sync_error text,
+        login text
+      )''');
+  }
+
   /// Closes and deletes this login's data, at sign-out.
   Future<void> destroy() async {
     await _db.close();
@@ -132,6 +153,19 @@ class LocalDb {
   }
 
   Future<void> setLastSyncedAt(DateTime at) => _setMeta('last_synced_at', at.toUtc().toIso8601String());
+
+  // --- Voter figures, kept for showing offline ----------------------------
+
+  static String _statsKey(String? wardId, String? pollingUnitId) => 'stats:${wardId ?? ''}:${pollingUnitId ?? ''}';
+
+  /// The figures last fetched for an area, with when.
+  Future<VoterStats?> stats(String? wardId, String? pollingUnitId) async {
+    final json = await _meta(_statsKey(wardId, pollingUnitId));
+    return json == null ? null : VoterStats.fromJson(jsonDecode(json));
+  }
+
+  Future<void> saveStats(String? wardId, String? pollingUnitId, Map<String, dynamic> json) =>
+      _setMeta(_statsKey(wardId, pollingUnitId), jsonEncode(json));
 
   // --- Voters -------------------------------------------------------------
 
@@ -262,9 +296,22 @@ class LocalDb {
   Future<List<NewCanvasser>> pendingCanvassers() async =>
       (await _db.query('canvassers', where: 'pending = 1', orderBy: 'created_at')).map(NewCanvasser.fromRow).toList();
 
-  /// Whether this phone already onboarded someone with [phone].
-  Future<bool> hasCanvasserPhone(String phone) async =>
-      (await _db.query('canvassers', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
+  /// Whether this phone already onboarded someone, of either kind, with [phone].
+  Future<bool> hasOnboardedPhone(String phone) async =>
+      (await _db.query('canvassers', where: 'phone = ?', whereArgs: [phone])).isNotEmpty ||
+      (await _db.query('ward_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
+
+  // --- Ward coordinators an LGA coordinator added -------------------------
+
+  Future<void> addWardCoordinator(NewWardCoordinator c) => _db.insert('ward_coordinators', c.toRow());
+
+  Future<List<NewWardCoordinator>> wardCoordinators() async =>
+      (await _db.query('ward_coordinators', orderBy: 'created_at desc')).map(NewWardCoordinator.fromRow).toList();
+
+  Future<List<NewWardCoordinator>> pendingWardCoordinators() async =>
+      (await _db.query('ward_coordinators', where: 'pending = 1', orderBy: 'created_at'))
+          .map(NewWardCoordinator.fromRow)
+          .toList();
 
   // --- What's waiting to sync ---------------------------------------------
 
@@ -278,7 +325,8 @@ class LocalDb {
     final r = await _db.rawQuery('''
       select (select count(*) from voters where pending = 1)
            + (select count(*) from visits where synced = 0)
-           + (select count(*) from canvassers where pending = 1) as n
+           + (select count(*) from canvassers where pending = 1)
+           + (select count(*) from ward_coordinators where pending = 1) as n
     ''');
     return r.first['n'] as int;
   }
@@ -287,17 +335,19 @@ class LocalDb {
     final r = await _db.rawQuery('''
       select (select count(*) from voters where pending = 1 and sync_error is not null)
            + (select count(*) from visits where synced = 0 and sync_error is not null)
-           + (select count(*) from canvassers where sync_error is not null) as n
+           + (select count(*) from canvassers where sync_error is not null)
+           + (select count(*) from ward_coordinators where sync_error is not null) as n
     ''');
     return r.first['n'] as int;
   }
 
-  /// Applies canvass_sync()'s answer for the canvassers it was sent.
-  Future<void> markCanvassersSynced(List<Map<String, dynamic>> results) => _db.transaction((tx) async {
+  /// Applies the server's answer for the people of [table] ('canvassers' or
+  /// 'ward_coordinators') it was sent.
+  Future<void> markOnboardedSynced(String table, List<Map<String, dynamic>> results) => _db.transaction((tx) async {
         for (final r in results) {
           final ok = r['status'] == 'ok';
           await tx.update(
-            'canvassers',
+            table,
             ok ? {'pending': 0, 'sync_error': null, 'login': r['login'] ?? 'pending'} : {'sync_error': r['error'] ?? 'Not accepted'},
             where: 'id = ?',
             whereArgs: [r['id']],
@@ -305,17 +355,17 @@ class LocalDb {
         }
       });
 
-  /// Sent canvassers whose login hasn't been made yet.
-  Future<List<String>> canvassersAwaitingLogin() async =>
-      (await _db.query('canvassers', columns: ['id'], where: "pending = 0 and coalesce(login, '') <> 'made'"))
+  /// The people of [table] sent whose login hasn't been made yet.
+  Future<List<String>> awaitingLogin(String table) async =>
+      (await _db.query(table, columns: ['id'], where: "pending = 0 and coalesce(login, '') <> 'made'"))
           .map((r) => r['id'] as String)
           .toList();
 
   /// Applies the canvasser-logins function's answer: a login made, or why not.
-  Future<void> markLogins(List<Map<String, dynamic>> results) => _db.transaction((tx) async {
+  Future<void> markLogins(String table, List<Map<String, dynamic>> results) => _db.transaction((tx) async {
         for (final r in results) {
           await tx.update(
-            'canvassers',
+            table,
             {'login': r['login'] ?? 'pending', 'sync_error': r['error']},
             where: 'id = ?',
             whereArgs: [r['id']],

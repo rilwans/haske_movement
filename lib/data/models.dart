@@ -2,21 +2,34 @@ import 'dart:convert';
 
 /// A polling unit the signed-in person can canvass.
 class PollingUnit {
-  const PollingUnit({required this.id, required this.code, required this.name, required this.wardName});
+  const PollingUnit({required this.id, required this.code, required this.name, this.wardId, required this.wardName});
 
   final String id;
   final String code;
   final String name;
+
+  /// Null in a profile stored before erims sent it, until the next sync.
+  final String? wardId;
   final String wardName;
 
   factory PollingUnit.fromJson(Map<String, dynamic> j) => PollingUnit(
         id: j['id'] as String,
         code: j['code'] as String,
         name: j['name'] as String,
+        wardId: j['ward_id'] as String?,
         wardName: j['ward_name'] as String,
       );
 
-  Map<String, dynamic> toJson() => {'id': id, 'code': code, 'name': name, 'ward_name': wardName};
+  Map<String, dynamic> toJson() => {'id': id, 'code': code, 'name': name, 'ward_id': wardId, 'ward_name': wardName};
+}
+
+/// A ward in a coordinator's area, from their polling units.
+class Ward {
+  const Ward({required this.id, required this.name, required this.pollingUnits});
+
+  final String id;
+  final String name;
+  final int pollingUnits;
 }
 
 /// Who is signed in, from my_app_profile(): a canvasser at one polling
@@ -48,6 +61,7 @@ class AppProfile {
   final List<PollingUnit> pollingUnits;
 
   bool get isCoordinator => role != 'canvasser';
+  bool get isLgaCoordinator => role == 'lga_coordinator';
   String get fullName => '$firstName $lastName';
 
   String get roleLabel => switch (role) {
@@ -62,6 +76,28 @@ class AppProfile {
   PollingUnit? pollingUnit(String id) {
     for (final p in pollingUnits) {
       if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// The wards of [pollingUnits], by name. Empty until the profile has ward ids.
+  List<Ward> get wards {
+    final names = <String, String>{};
+    final counts = <String, int>{};
+    for (final p in pollingUnits) {
+      final id = p.wardId;
+      if (id == null) continue;
+      names[id] = p.wardName;
+      counts.update(id, (n) => n + 1, ifAbsent: () => 1);
+    }
+    return [
+      for (final id in names.keys) Ward(id: id, name: names[id]!, pollingUnits: counts[id]!),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  Ward? ward(String id) {
+    for (final w in wards) {
+      if (w.id == id) return w;
     }
     return null;
   }
@@ -165,6 +201,197 @@ class NewCanvasser {
         'polling_unit_id': pollingUnitId,
       };
 }
+
+/// A ward coordinator an LGA coordinator added on this phone. Their login is
+/// made when it reaches the server.
+class NewWardCoordinator {
+  const NewWardCoordinator({
+    required this.id,
+    required this.firstName,
+    required this.lastName,
+    required this.phone,
+    required this.wardId,
+    required this.wardName,
+    required this.createdAt,
+    this.whatsappNumber,
+    this.email,
+    this.pending = true,
+    this.syncError,
+    this.login,
+  });
+
+  final String id;
+  final String firstName;
+  final String lastName;
+  final String phone;
+  final String? whatsappNumber;
+  final String? email;
+  final String wardId;
+  final String wardName;
+  final DateTime createdAt;
+  final bool pending;
+  final String? syncError;
+
+  /// 'made' once they can sign in, from the server.
+  final String? login;
+
+  String get fullName => '$firstName $lastName';
+
+  factory NewWardCoordinator.fromRow(Map<String, Object?> r) => NewWardCoordinator(
+        id: r['id'] as String,
+        firstName: r['first_name'] as String,
+        lastName: r['last_name'] as String,
+        phone: r['phone'] as String,
+        whatsappNumber: r['whatsapp_number'] as String?,
+        email: r['email'] as String?,
+        wardId: r['ward_id'] as String,
+        wardName: r['ward_name'] as String,
+        createdAt: DateTime.parse(r['created_at'] as String),
+        pending: r['pending'] == 1,
+        syncError: r['sync_error'] as String?,
+        login: r['login'] as String?,
+      );
+
+  Map<String, Object?> toRow() => {
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'phone': phone,
+        'whatsapp_number': whatsappNumber,
+        'email': email,
+        'ward_id': wardId,
+        'ward_name': wardName,
+        'created_at': createdAt.toUtc().toIso8601String(),
+        'pending': pending ? 1 : 0,
+        'sync_error': syncError,
+        'login': login,
+      };
+
+  /// What onboard_ward_coordinators() takes.
+  Map<String, dynamic> toSyncJson() => {
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'phone': phone,
+        'whatsapp_number': whatsappNumber,
+        'email': email,
+        'ward_id': wardId,
+      };
+}
+
+/// The voter figures for a coordinator's area, or a ward or polling unit in
+/// it, from app_voter_stats(). As erims's voter dashboard counts them.
+class VoterStats {
+  const VoterStats({
+    required this.level,
+    required this.units,
+    required this.registered,
+    required this.voters,
+    required this.reachable,
+    required this.canvassed,
+    required this.counts,
+    required this.areas,
+    required this.canvassers,
+    required this.wardCoordinators,
+    required this.fetchedAt,
+  });
+
+  /// What [areas] are: 'ward' or 'polling_unit'.
+  final String level;
+  final int units;
+
+  /// INEC's registered voters.
+  final int registered;
+
+  /// Voters on the list.
+  final int voters;
+
+  /// With a phone or WhatsApp number.
+  final int reachable;
+
+  /// Visited at least once.
+  final int canvassed;
+
+  /// 'gender:M', 'age:25_34', 'age:25_34:F', 'support:undecided',
+  /// 'pvc:has_pvc', 'plans:yes' and so on; support, PVC and plans count each
+  /// canvassed voter once, by their latest visit.
+  final Map<String, int> counts;
+  final List<AreaStats> areas;
+  final int canvassers;
+  final int wardCoordinators;
+  final DateTime fetchedAt;
+
+  int count(String key) => counts[key] ?? 0;
+
+  factory VoterStats.fromJson(Map<String, dynamic> j) {
+    final team = (j['team'] as Map?) ?? const {};
+    return VoterStats(
+      level: j['level'] as String,
+      units: _int(j['units']),
+      registered: _int(j['registered']),
+      voters: _int(j['voters']),
+      reachable: _int(j['reachable']),
+      canvassed: _int(j['canvassed']),
+      counts: {for (final e in (j['counts'] as Map).entries) e.key as String: _int(e.value)},
+      areas: [for (final a in (j['areas'] as List)) AreaStats.fromJson(a as Map<String, dynamic>)],
+      canvassers: _int(team['canvassers']),
+      wardCoordinators: _int(team['ward_coordinators']),
+      fetchedAt: j['fetched_at'] == null ? DateTime.now() : DateTime.parse(j['fetched_at'] as String),
+    );
+  }
+}
+
+/// One ward or polling unit's line in [VoterStats.areas].
+class AreaStats {
+  const AreaStats({
+    required this.id,
+    required this.name,
+    required this.units,
+    required this.registered,
+    required this.voters,
+    required this.male,
+    required this.female,
+    required this.reachable,
+    required this.canvassed,
+    required this.supporters,
+    required this.persuadable,
+  });
+
+  final String id;
+
+  /// A ward's name, or a polling unit's code and name.
+  final String name;
+  final int units;
+  final int registered;
+  final int voters;
+  final int male;
+  final int female;
+  final int reachable;
+  final int canvassed;
+
+  /// Strong or leaning support, by their latest visit.
+  final int supporters;
+
+  /// Undecided or leaning against.
+  final int persuadable;
+
+  factory AreaStats.fromJson(Map<String, dynamic> j) => AreaStats(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        units: _int(j['units']),
+        registered: _int(j['registered']),
+        voters: _int(j['voters']),
+        male: _int(j['male']),
+        female: _int(j['female']),
+        reachable: _int(j['reachable']),
+        canvassed: _int(j['canvassed']),
+        supporters: _int(j['supporters']),
+        persuadable: _int(j['persuadable']),
+      );
+}
+
+/// Counts come as JSON numbers, which may be decoded as doubles.
+int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 
 class Voter {
   const Voter({
