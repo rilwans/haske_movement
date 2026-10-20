@@ -175,6 +175,8 @@ class Voter {
     this.phone,
     this.whatsappNumber,
     this.email,
+    this.gender,
+    this.birthYear,
     this.addedLocally = false,
     this.pending = false,
     this.syncError,
@@ -190,6 +192,10 @@ class Voter {
   final String? phone;
   final String? whatsappNumber;
   final String? email;
+
+  /// 'M' or 'F'.
+  final String? gender;
+  final int? birthYear;
 
   /// Added by this canvasser on the device.
   final bool addedLocally;
@@ -207,6 +213,8 @@ class Voter {
         phone: r['phone'] as String?,
         whatsappNumber: r['whatsapp_number'] as String?,
         email: r['email'] as String?,
+        gender: r['gender'] as String?,
+        birthYear: r['birth_year'] as int?,
         addedLocally: r['added_locally'] == 1,
         pending: r['pending'] == 1,
         syncError: r['sync_error'] as String?,
@@ -222,6 +230,8 @@ class Voter {
         'phone': phone,
         'whatsapp_number': whatsappNumber,
         'email': email,
+        'gender': gender,
+        'birth_year': birthYear,
       };
 }
 
@@ -238,6 +248,8 @@ class Visit {
     this.reportedPhone,
     this.reportedWhatsapp,
     this.reportedVin,
+    this.reportedGender,
+    this.reportedBirthYear,
     this.latitude,
     this.longitude,
     this.synced = false,
@@ -255,6 +267,8 @@ class Visit {
   final String? reportedPhone;
   final String? reportedWhatsapp;
   final String? reportedVin;
+  final String? reportedGender;
+  final int? reportedBirthYear;
   final double? latitude;
   final double? longitude;
   final bool synced;
@@ -272,6 +286,8 @@ class Visit {
         reportedPhone: r['reported_phone'] as String?,
         reportedWhatsapp: r['reported_whatsapp'] as String?,
         reportedVin: r['reported_vin'] as String?,
+        reportedGender: r['reported_gender'] as String?,
+        reportedBirthYear: r['reported_birth_year'] as int?,
         latitude: (r['latitude'] as num?)?.toDouble(),
         longitude: (r['longitude'] as num?)?.toDouble(),
         synced: r['synced'] == 1,
@@ -290,6 +306,8 @@ class Visit {
         'reported_phone': reportedPhone,
         'reported_whatsapp': reportedWhatsapp,
         'reported_vin': reportedVin,
+        'reported_gender': reportedGender,
+        'reported_birth_year': reportedBirthYear,
         'latitude': latitude,
         'longitude': longitude,
         'synced': synced ? 1 : 0,
@@ -309,6 +327,8 @@ class Visit {
         'reported_phone': reportedPhone,
         'reported_whatsapp': reportedWhatsapp,
         'reported_vin': reportedVin,
+        'reported_gender': reportedGender,
+        'reported_birth_year': reportedBirthYear,
         'latitude': latitude,
         'longitude': longitude,
       };
@@ -317,6 +337,11 @@ class Visit {
 /// The answers a canvasser can pick, as stored and as shown. The stored
 /// values match the checks on erims's canvass_visits table.
 class Options {
+  static const gender = {
+    'M': 'Male',
+    'F': 'Female',
+  };
+
   static const support = {
     'strong_support': 'Strong support',
     'leaning_support': 'Leaning support',

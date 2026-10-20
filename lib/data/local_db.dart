@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -56,6 +56,7 @@ class LocalDb {
         await db.execute('create index visits_voter_id on visits (voter_id)');
         await db.execute('create index visits_synced on visits (synced)');
         await _createV2(db);
+        await _createV3(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -64,6 +65,7 @@ class LocalDb {
           await db.delete('meta', where: 'key = ?', whereArgs: ['canvasser']);
           await _createV2(db);
         }
+        if (from < 3) await _createV3(db);
       },
     );
     return LocalDb._(db, path);
@@ -88,6 +90,14 @@ class LocalDb {
         sync_error text,
         login text
       )''');
+  }
+
+  /// Version 3: voters' gender and year of birth, and what a visit was told of them.
+  static Future<void> _createV3(Database db) async {
+    await db.execute('alter table voters add column gender text');
+    await db.execute('alter table voters add column birth_year integer');
+    await db.execute('alter table visits add column reported_gender text');
+    await db.execute('alter table visits add column reported_birth_year integer');
   }
 
   /// Closes and deletes this login's data, at sign-out.
@@ -170,6 +180,8 @@ class LocalDb {
         'phone': v.phone,
         'whatsapp_number': v.whatsappNumber,
         'email': v.email,
+        'gender': v.gender,
+        'birth_year': v.birthYear,
         'added_locally': 1,
         'pending': 1,
       });
@@ -196,6 +208,8 @@ class LocalDb {
               'phone': r['phone'],
               'whatsapp_number': r['whatsapp_number'],
               'email': r['email'],
+              'gender': r['gender'],
+              'birth_year': r['birth_year'],
             },
             conflictAlgorithm: ConflictAlgorithm.ignore,
           );

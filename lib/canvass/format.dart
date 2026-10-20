@@ -26,10 +26,22 @@ String dateTime(DateTime at) {
   return '${l.day} ${months[l.month - 1]} ${l.year}, ${two(l.hour)}:${two(l.minute)}';
 }
 
-/// VINs are 19 letters and digits; people type them with spaces or dashes.
+/// VINs are 6 to 30 letters and digits; people type them with spaces or dashes.
 String? normalizeVin(String input) {
   final v = input.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
   return v.isEmpty ? null : v;
 }
 
-bool isValidVin(String vin) => RegExp(r'^[0-9A-Z]{19}$').hasMatch(vin);
+bool isValidVin(String vin) => RegExp(r'^[0-9A-Z]{6,30}$').hasMatch(vin);
+
+/// A year of birth as typed, or null if blank.
+int? parseBirthYear(String input) => int.tryParse(input.trim());
+
+/// The check erims makes: a year from 1900 to this one.
+String? birthYearError(String? input) {
+  final t = (input ?? '').trim();
+  if (t.isEmpty) return null;
+  final y = int.tryParse(t);
+  final now = DateTime.now().year;
+  return y != null && y >= 1900 && y <= now ? null : 'Enter a year from 1900 to $now, or leave it blank';
+}
