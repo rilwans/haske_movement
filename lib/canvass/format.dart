@@ -18,6 +18,12 @@ String timeAgo(DateTime at) {
   return '${d.inDays} days ago';
 }
 
+/// 15 Dec 2026.
+String shortDate(DateTime d) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${months[d.month - 1]} ${d.year}';
+}
+
 /// 12 Oct 2026, 14:05 in the phone's time zone.
 String dateTime(DateTime at) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

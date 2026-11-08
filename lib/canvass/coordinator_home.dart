@@ -9,6 +9,7 @@ import 'canvass_shell.dart';
 import 'format.dart';
 import 'lga_choice.dart';
 import 'onboard_canvasser_screen.dart';
+import 'state_overview_tab.dart';
 import 'sync_bar.dart';
 import 'targets_tab.dart';
 import 'team_activity_tab.dart';
@@ -128,7 +129,12 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
                         reason: 'Choose an LGA to see its polling units.',
                       )
                     : _PollingUnitsTab(key: lgaKey),
-                lazy(1, VoterStatsTab(key: lgaKey)),
+                lazy(
+                  1,
+                  needsLga
+                      ? const StateStatsTab()
+                      : VoterStatsTab(key: lgaKey),
+                ),
                 lazy(
                   2,
                   needsLga

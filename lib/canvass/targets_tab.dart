@@ -12,12 +12,6 @@ const _good = Color(0xFF0CA30C);
 const _warning = Color(0xFFFAB219);
 const _critical = Color(0xFFD03B3B);
 
-/// 15 Dec 2026.
-String _date(DateTime d) {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return '${d.day} ${months[d.month - 1]} ${d.year}';
-}
-
 /// Each ward's canvassing against its target: how far along, whether it's on
 /// pace, and when it'll get there at the recent rate. LGA and state
 /// coordinators set their wards' targets; a ward coordinator sees theirs.
@@ -212,13 +206,13 @@ class _WardCard extends StatelessWidget {
     final projected = w.projectedOn(today);
     final lines = <String>[
       '$share% canvassed · ${formatCount(w.canvassed)} of ${formatCount(w.voters)} voters',
-      if (t != null) 'Target ${t.percent}% by ${_date(t.dueOn)} · ${formatCount(w.targetCount!)} voters',
+      if (t != null) 'Target ${t.percent}% by ${shortDate(t.dueOn)} · ${formatCount(w.targetCount!)} voters',
       if (status == TargetStatus.onPace || status == TargetStatus.behind)
         'Expected by today: ${percent(expected!, w.voters) ?? 0}% (${formatCount(expected)})',
       if (status == TargetStatus.onPace || status == TargetStatus.behind || status == TargetStatus.missed)
         projected == null
             ? 'Nobody new canvassed in the last ${w.recentDays} days'
-            : 'At the recent pace: ${_date(projected)}',
+            : 'At the recent pace: ${shortDate(projected)}',
       if (status == TargetStatus.none) 'No target set',
     ];
     return Card(
@@ -384,7 +378,7 @@ class _TargetSheetState extends State<_TargetSheet> {
                 prefixIcon: Icon(Icons.event),
                 suffixIcon: Icon(Icons.arrow_drop_down),
               ),
-              child: Text(_dueOn == null ? 'Choose a date' : _date(_dueOn!)),
+              child: Text(_dueOn == null ? 'Choose a date' : shortDate(_dueOn!)),
             ),
           ),
           if (w.target != null) ...[

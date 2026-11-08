@@ -301,6 +301,19 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   /// Where [fetchTargets] keeps its answer.
   static String targetsKey(String? lgaId) => lgaId == null ? 'targets' : 'targets:$lgaId';
 
+  /// How every LGA in a state coordinator's state stands. Needs internet;
+  /// throws a message to show otherwise.
+  Future<StateOverview> fetchStateOverview() async {
+    await _ensureSession();
+    final json = await _client.rpc('app_state_overview') as Map<String, dynamic>;
+    json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
+    await db.saveCached(stateOverviewKey, json);
+    return StateOverview.fromJson(json);
+  }
+
+  /// Where [fetchStateOverview] keeps its answer.
+  static const stateOverviewKey = 'state_overview';
+
   /// An LGA or state coordinator sets a ward's target from today, or with no
   /// [percent] removes it. Needs internet.
   Future<void> setWardTarget(String wardId, {int? percent, DateTime? dueOn}) async {

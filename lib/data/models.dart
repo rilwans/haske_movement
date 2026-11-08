@@ -789,6 +789,229 @@ class Options {
   };
 }
 
+/// How one LGA stands for its state coordinator, from app_state_overview().
+class LgaOverview {
+  const LgaOverview({
+    required this.id,
+    required this.name,
+    required this.voters,
+    required this.canvassed,
+    required this.supporters,
+    required this.persuadable,
+    required this.ready,
+    required this.needPvc,
+    required this.wavering,
+    required this.visits7d,
+    required this.visitsPrev7d,
+    required this.new7d,
+    required this.newPrev7d,
+    required this.active7d,
+    required this.flagged7d,
+    required this.lastVisitAt,
+    required this.canvassers,
+    required this.lgaCoordinators,
+    required this.wards,
+    required this.wardsNoCoordinator,
+    required this.units,
+    required this.unitsNoCanvasser,
+    required this.wardsWithTarget,
+    required this.wardsBehind,
+    required this.wardsMissed,
+    required this.issues,
+    required this.issuesPersuadable,
+  });
+
+  /// Fewest visits the week before for a fall to count as slowing down.
+  static const _minVisitsToCompare = 10;
+
+  /// Visits to check before they're worth raising, and as a share of the week's.
+  static const _minFlagged = 5;
+  static const _minFlaggedPercent = 20;
+
+  final String id;
+  final String name;
+  final int voters;
+
+  /// Visited at least once.
+  final int canvassed;
+
+  /// Strong or leaning support, by their latest visit.
+  final int supporters;
+
+  /// Undecided or leaning against.
+  final int persuadable;
+
+  /// Supporters with a PVC who say they'll vote.
+  final int ready;
+
+  /// Supporters who haven't got a PVC or aren't registered.
+  final int needPvc;
+
+  /// Supporters with a PVC who are unsure of voting, or won't.
+  final int wavering;
+
+  /// In the last 7 days, and the 7 before those.
+  final int visits7d;
+  final int visitsPrev7d;
+
+  /// Voters visited for the first time, in the same two weeks.
+  final int new7d;
+  final int newPrev7d;
+
+  /// People who recorded a visit in the last 7 days.
+  final int active7d;
+
+  /// Visits in the last 7 days that were far, without a location, or rushed.
+  final int flagged7d;
+  final DateTime? lastVisitAt;
+  final int canvassers;
+  final int lgaCoordinators;
+  final int wards;
+  final int wardsNoCoordinator;
+  final int units;
+  final int unitsNoCanvasser;
+  final int wardsWithTarget;
+  final int wardsBehind;
+  final int wardsMissed;
+
+  /// Voters naming each issue at their latest visit, by [Options.issues] key.
+  final Map<String, int> issues;
+  final Map<String, int> issuesPersuadable;
+
+  int get unreached => voters - canvassed;
+
+  /// Whether a ward lacks a coordinator or a polling unit a canvasser.
+  bool get hasGaps => wardsNoCoordinator > 0 || unitsNoCanvasser > 0;
+
+  bool get _quiet => voters > 0 && visits7d == 0;
+
+  bool get _slowing => visitsPrev7d >= _minVisitsToCompare && visits7d > 0 && visits7d * 2 <= visitsPrev7d;
+
+  bool get _manyFlagged => flagged7d >= _minFlagged && flagged7d * 100 >= visits7d * _minFlaggedPercent;
+
+  /// What the state coordinator should look at here, the most serious first.
+  List<String> get concerns => [
+        if (lgaCoordinators == 0) 'No LGA coordinator',
+        if (_quiet) 'No visits in the last 7 days',
+        if (_slowing) 'Visits down ${100 - percent100(visits7d, visitsPrev7d)}% on the week before',
+        if (wardsMissed > 0) '$wardsMissed ${wardsMissed == 1 ? 'ward' : 'wards'} past the target date',
+        if (wardsBehind > 0) '$wardsBehind ${wardsBehind == 1 ? 'ward' : 'wards'} behind target',
+        if (_manyFlagged) '$flagged7d visits to check',
+      ];
+
+  /// The most-named issue keys here, most first.
+  List<String> topIssues({bool persuadableOnly = false, int limit = 3}) => [
+        for (final e in rankedCounts(persuadableOnly ? issuesPersuadable : issues).take(limit)) e.key,
+      ];
+
+  factory LgaOverview.fromJson(Map<String, dynamic> j) => LgaOverview(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        voters: _int(j['voters']),
+        canvassed: _int(j['canvassed']),
+        supporters: _int(j['supporters']),
+        persuadable: _int(j['persuadable']),
+        ready: _int(j['ready']),
+        needPvc: _int(j['need_pvc']),
+        wavering: _int(j['wavering']),
+        visits7d: _int(j['visits_7d']),
+        visitsPrev7d: _int(j['visits_prev_7d']),
+        new7d: _int(j['new_7d']),
+        newPrev7d: _int(j['new_prev_7d']),
+        active7d: _int(j['active_7d']),
+        flagged7d: _int(j['flagged_7d']),
+        lastVisitAt: j['last_visit_at'] == null ? null : DateTime.parse(j['last_visit_at'] as String),
+        canvassers: _int(j['canvassers']),
+        lgaCoordinators: _int(j['lga_coordinators']),
+        wards: _int(j['wards']),
+        wardsNoCoordinator: _int(j['wards_no_coordinator']),
+        units: _int(j['units']),
+        unitsNoCanvasser: _int(j['units_no_canvasser']),
+        wardsWithTarget: _int(j['wards_with_target']),
+        wardsBehind: _int(j['wards_behind']),
+        wardsMissed: _int(j['wards_missed']),
+        issues: _counts(j['issues']),
+        issuesPersuadable: _counts(j['issues_persuadable']),
+      );
+}
+
+Map<String, int> _counts(Object? json) => {
+      for (final e in ((json as Map?) ?? const {}).entries) e.key as String: _int(e.value),
+    };
+
+/// [part] as a whole percentage of [whole], which isn't zero.
+int percent100(int part, int whole) => (part * 100 / whole).round();
+
+/// [counts] with the largest first, then by key.
+List<MapEntry<String, int>> rankedCounts(Map<String, int> counts) => counts.entries.toList()
+  ..sort((a, b) => a.value != b.value ? b.value.compareTo(a.value) : a.key.compareTo(b.key));
+
+/// A state coordinator's view of every LGA, from app_state_overview().
+class StateOverview {
+  const StateOverview({
+    required this.electionName,
+    required this.electionDate,
+    required this.lgas,
+    required this.fetchedAt,
+  });
+
+  /// How many days of new voters the projection's rate is taken from.
+  static const _rateDays = 14;
+
+  /// The next election across the state; null when none is set.
+  final String? electionName;
+  final DateTime? electionDate;
+  final List<LgaOverview> lgas;
+  final DateTime fetchedAt;
+
+  int total(int Function(LgaOverview) of) => lgas.fold(0, (n, l) => n + of(l));
+
+  /// The LGAs with something to look at, those with the most first.
+  List<LgaOverview> get needingAttention {
+    final out = lgas.where((l) => l.concerns.isNotEmpty).toList();
+    out.sort((a, b) {
+      final c = b.concerns.length.compareTo(a.concerns.length);
+      return c != 0 ? c : b.voters.compareTo(a.voters);
+    });
+    return out;
+  }
+
+  /// Newly canvassed voters a day, lately.
+  double get newPerDay => total((l) => l.new7d + l.newPrev7d) / _rateDays;
+
+  /// Days from [today] to the election, or null when there's none set.
+  int? daysLeft(DateTime today) => electionDate == null ? null : _day(electionDate!).difference(_day(today)).inDays;
+
+  /// Voters canvassed by the election if the recent rate carries on; null
+  /// when there's no election set or nobody new has been canvassed lately.
+  int? projectedCanvassed(DateTime today) {
+    final days = daysLeft(today);
+    if (days == null || days < 0 || newPerDay == 0) return null;
+    final voters = total((l) => l.voters);
+    final projected = total((l) => l.canvassed) + (newPerDay * days).round();
+    return projected > voters ? voters : projected;
+  }
+
+  /// Voters naming each issue across the state, the most named first.
+  List<MapEntry<String, int>> topIssues({bool persuadableOnly = false}) {
+    final sums = <String, int>{};
+    for (final l in lgas) {
+      (persuadableOnly ? l.issuesPersuadable : l.issues).forEach((k, n) => sums.update(k, (v) => v + n, ifAbsent: () => n));
+    }
+    return rankedCounts(sums);
+  }
+
+  factory StateOverview.fromJson(Map<String, dynamic> j) {
+    final election = j['next_election'] as Map<String, dynamic>?;
+    return StateOverview(
+      electionName: election?['name'] as String?,
+      electionDate: election == null ? null : DateTime.parse(election['date'] as String),
+      lgas: [for (final l in j['lgas'] as List) LgaOverview.fromJson(l as Map<String, dynamic>)],
+      fetchedAt: DateTime.parse(j['fetched_at'] as String),
+    );
+  }
+}
+
 /// Someone a coordinator answers for, with what they've done in a period,
 /// from app_team_activity().
 class TeamMember {
