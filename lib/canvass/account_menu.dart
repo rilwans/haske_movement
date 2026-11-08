@@ -28,7 +28,7 @@ class AccountMenu extends StatelessWidget {
             subtitle: Text('${p.roleLabel} · ${p.areaLabel}'),
           ),
         ),
-        const PopupMenuItem(value: 'account', child: Text('My account')),
+        if (!p.isCandidate) const PopupMenuItem(value: 'account', child: Text('My account')),
         const PopupMenuItem(value: 'signout', child: Text('Sign out')),
       ],
     );
@@ -40,9 +40,9 @@ class AccountMenu extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Sign out?'),
-        content: const Text(
-          "The voters downloaded to this phone will be removed. "
-          "You'll need internet to sign in again.",
+        content: Text(
+          "${service.profile!.isCandidate ? 'The figures saved' : 'The voters downloaded'} to this phone will be "
+          "removed. You'll need internet to sign in again.",
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),

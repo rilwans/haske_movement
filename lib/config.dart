@@ -29,9 +29,9 @@ class Config {
     defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH',
   );
 
-  /// The roles this app signs in: canvassers, and the ward, LGA and state
-  /// coordinators who onboard them.
-  static const appRoles = {'Canvasser', 'Coordinator'};
+  /// The roles this app signs in: canvassers, the ward, LGA and state
+  /// coordinators who onboard them, and candidates following the campaign.
+  static const appRoles = {'Canvasser', 'Coordinator', 'Candidate'};
 
   /// What erims sets new and reset canvasser logins to, for coordinators to
   /// tell the people they onboard. Must match CANVASSER_DEFAULT_PASSWORD on

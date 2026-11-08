@@ -67,9 +67,11 @@ class AppProfile {
     required this.pollingUnits,
     this.lgas = const [],
     this.selectedLgaId,
+    this.areaName,
   });
 
-  /// 'canvasser', 'ward_coordinator', 'lga_coordinator' or 'state_coordinator'.
+  /// 'canvasser', 'ward_coordinator', 'lga_coordinator', 'state_coordinator'
+  /// or 'candidate'.
   final String role;
   final String personId;
   final String firstName;
@@ -87,30 +89,45 @@ class AppProfile {
   /// A state coordinator's LGAs; empty for anyone else.
   final List<Lga> lgas;
 
-  /// The LGA a state coordinator is working in, kept on the phone.
+  /// The LGA a state coordinator or candidate is looking at, kept on the phone.
   final String? selectedLgaId;
 
+  /// A candidate's election area, such as "Kwara North"; null for anyone else.
+  final String? areaName;
+
+  /// Anyone who isn't a canvasser, so has no single polling unit of their own.
   bool get isCoordinator => role != 'canvasser';
   bool get isLgaCoordinator => role == 'lga_coordinator';
   bool get isStateCoordinator => role == 'state_coordinator';
+  bool get isCandidate => role == 'candidate';
 
-  /// Whether they work across wards, so choose among them and add coordinators.
-  bool get coversWards => isLgaCoordinator || isStateCoordinator;
-  String get fullName => '$firstName $lastName';
+  /// Whether they cover several LGAs and choose which to look at.
+  bool get picksLga => isStateCoordinator || isCandidate;
+
+  /// Whether they work across wards, so choose among them.
+  bool get coversWards => isLgaCoordinator || picksLga;
+  String get fullName => '$firstName $lastName'.trim();
 
   String get roleLabel => switch (role) {
         'ward_coordinator' => 'Ward coordinator',
         'lga_coordinator' => 'LGA coordinator',
         'state_coordinator' => 'State coordinator',
+        'candidate' => 'Candidate',
         _ => 'Canvasser',
       };
 
-  /// "Boriya/Shiya ward, Baruten", "Baruten LGA" or "Kwara State".
-  String get areaLabel => isStateCoordinator
-      ? '$stateName State'
-      : wardName != null
-          ? '$wardName ward, $lgaName'
-          : '$lgaName LGA';
+  /// "Boriya/Shiya ward, Baruten", "Baruten LGA", "Kwara State" or a
+  /// candidate's "Kwara North".
+  String get areaLabel => isCandidate
+      ? areaName ?? stateName
+      : isStateCoordinator
+          ? '$stateName State'
+          : wardName != null
+              ? '$wardName ward, $lgaName'
+              : '$lgaName LGA';
+
+  /// The choice that covers all their LGAs.
+  String get allLgasLabel => 'All LGAs in ${isCandidate ? areaLabel : stateName}';
 
   Lga? lga(String? id) {
     for (final l in lgas) {
@@ -133,6 +150,7 @@ class AppProfile {
         pollingUnits: units,
         lgas: lgas,
         selectedLgaId: lga?.id,
+        areaName: areaName,
       );
 
   PollingUnit? pollingUnit(String id) {
@@ -170,7 +188,8 @@ class AppProfile {
         firstName: j['first_name'] as String,
         lastName: j['last_name'] as String,
         phone: j['phone'] as String,
-        stateName: j['state_name'] as String,
+        // Null for a presidential candidate, whose area is the country.
+        stateName: j['state_name'] as String? ?? '',
         lgaName: j['lga_name'] as String?,
         wardName: j['ward_name'] as String?,
         pollingUnits: [
@@ -180,6 +199,7 @@ class AppProfile {
           for (final l in (j['lgas'] as List? ?? const [])) Lga.fromJson(l as Map<String, dynamic>),
         ],
         selectedLgaId: j['selected_lga_id'] as String?,
+        areaName: j['area_name'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -194,6 +214,7 @@ class AppProfile {
         'polling_units': pollingUnits.map((p) => p.toJson()).toList(),
         'lgas': lgas.map((l) => l.toJson()).toList(),
         'selected_lga_id': selectedLgaId,
+        'area_name': areaName,
       };
 }
 
@@ -809,6 +830,7 @@ class LgaOverview {
     required this.flagged7d,
     required this.lastVisitAt,
     required this.canvassers,
+    required this.wardCoordinators,
     required this.lgaCoordinators,
     required this.wards,
     required this.wardsNoCoordinator,
@@ -865,6 +887,7 @@ class LgaOverview {
   final int flagged7d;
   final DateTime? lastVisitAt;
   final int canvassers;
+  final int wardCoordinators;
   final int lgaCoordinators;
   final int wards;
   final int wardsNoCoordinator;
@@ -922,6 +945,7 @@ class LgaOverview {
         flagged7d: _int(j['flagged_7d']),
         lastVisitAt: j['last_visit_at'] == null ? null : DateTime.parse(j['last_visit_at'] as String),
         canvassers: _int(j['canvassers']),
+        wardCoordinators: _int(j['ward_coordinators']),
         lgaCoordinators: _int(j['lga_coordinators']),
         wards: _int(j['wards']),
         wardsNoCoordinator: _int(j['wards_no_coordinator']),
@@ -946,7 +970,19 @@ int percent100(int part, int whole) => (part * 100 / whole).round();
 List<MapEntry<String, int>> rankedCounts(Map<String, int> counts) => counts.entries.toList()
   ..sort((a, b) => a.value != b.value ? b.value.compareTo(a.value) : a.key.compareTo(b.key));
 
-/// A state coordinator's view of every LGA, from app_state_overview().
+/// An LGA coordinator to call ahead of a visit, from app_lga_coordinators().
+class LgaContact {
+  const LgaContact({required this.name, required this.phone});
+
+  final String name;
+  final String phone;
+
+  factory LgaContact.fromJson(Map<String, dynamic> j) =>
+      LgaContact(name: j['name'] as String, phone: j['phone'] as String);
+}
+
+/// A state coordinator's or candidate's view of every LGA they cover, from
+/// app_state_overview().
 class StateOverview {
   const StateOverview({
     required this.electionName,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/canvass_service.dart';
+import 'candidate_home.dart';
 import 'coordinator_home.dart';
 import 'onboarding_screen.dart';
 import 'voter_list_screen.dart';
@@ -70,6 +71,7 @@ class _CanvassShellState extends State<CanvassShell> {
         builder: (context, _) {
           final p = service.profile;
           if (p == null) return const OnboardingScreen();
+          if (p.isCandidate) return const CandidateHome();
           if (p.isCoordinator) return const CoordinatorHome();
           return VoterListScreen(pollingUnit: p.pollingUnits.first, isHome: true);
         },

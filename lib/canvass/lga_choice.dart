@@ -38,7 +38,7 @@ class _LgaBarState extends State<LgaBar> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => LgaPicker(lgas: p.lgas, allLabel: 'All LGAs in ${p.stateName}'),
+      builder: (context) => LgaPicker(lgas: p.lgas, allLabel: p.allLgasLabel),
     );
     if (picked == null || !mounted) return;
     setState(() => _busy = true);

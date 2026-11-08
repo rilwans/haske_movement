@@ -162,7 +162,7 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
       await db.saveProfile(p);
       // A state coordinator's profile only lists the chosen LGA's polling
       // units; what they downloaded elsewhere is theirs while their state is.
-      final gone = p.isStateCoordinator
+      final gone = p.picksLga
           ? (previous?.stateName == p.stateName ? <String>{} : downloaded)
           : downloaded.difference(p.pollingUnits.map((u) => u.id).toSet());
       for (final id in gone) {
@@ -301,8 +301,25 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   /// Where [fetchTargets] keeps its answer.
   static String targetsKey(String? lgaId) => lgaId == null ? 'targets' : 'targets:$lgaId';
 
-  /// How every LGA in a state coordinator's state stands. Needs internet;
-  /// throws a message to show otherwise.
+  /// An LGA's coordinators to call ahead of a visit, from the server or,
+  /// offline, as last fetched.
+  Future<List<LgaContact>> fetchLgaContacts(String lgaId) async {
+    List<LgaContact> parse(List rows) => [for (final r in rows) LgaContact.fromJson(r as Map<String, dynamic>)];
+    final key = 'lga_contacts:$lgaId';
+    try {
+      await _ensureSession();
+      final rows = await _client.rpc('app_lga_coordinators', params: {'p_lga_id': lgaId}) as List;
+      await db.saveCached(key, {'people': rows});
+      return parse(rows);
+    } catch (e) {
+      final cached = await db.cached(key);
+      if (cached == null || !_isNetworkError(e)) rethrow;
+      return parse(cached['people'] as List);
+    }
+  }
+
+  /// How every LGA a state coordinator or candidate covers stands. Needs
+  /// internet; throws a message to show otherwise.
   Future<StateOverview> fetchStateOverview() async {
     await _ensureSession();
     final json = await _client.rpc('app_state_overview') as Map<String, dynamic>;
@@ -330,10 +347,10 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   static List<Map<String, dynamic>> _results(Object? list) =>
       ((list as List?) ?? const []).cast<Map<String, dynamic>>();
 
-  /// A state coordinator's chosen LGA for the server; erims knows anyone
-  /// else's area, and older deployments don't take the argument.
+  /// The chosen LGA of someone who covers several, for the server; erims
+  /// knows anyone else's area, and older deployments don't take the argument.
   Map<String, dynamic> get _lgaParam =>
-      profile?.isStateCoordinator == true ? {'p_lga_id': profile!.selectedLgaId} : const {};
+      profile?.picksLga == true ? {'p_lga_id': profile!.selectedLgaId} : const {};
 
   /// An LGA's polling units, from the server or, offline, as last fetched.
   Future<List<PollingUnit>> _lgaPollingUnits(String lgaId) async {
@@ -351,10 +368,11 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// The profile from the server, keeping a state coordinator on their LGA.
+  /// The profile from the server, keeping anyone who covers several LGAs on
+  /// the one they've chosen.
   Future<AppProfile> _latestProfile() async {
     final fresh = await _fetchProfile();
-    if (!fresh.isStateCoordinator) return fresh;
+    if (!fresh.picksLga) return fresh;
     final chosen = fresh.lga(profile?.selectedLgaId);
     final kept = chosen == null ? fresh : fresh.forLga(chosen, await _lgaPollingUnits(chosen.id));
     // They may have moved to another LGA while that loaded.
