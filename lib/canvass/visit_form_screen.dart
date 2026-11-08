@@ -7,6 +7,7 @@ import '../data/location.dart';
 import '../data/models.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'gender_year_fields.dart';
 
 /// What the voter said in one conversation. Saved on the phone and sent
 /// when there's internet.
@@ -24,6 +25,8 @@ class _VisitFormScreenState extends State<VisitFormScreen> {
   late final _phone = TextEditingController(text: displayPhone(widget.voter.phone));
   late final _whatsapp = TextEditingController(text: displayPhone(widget.voter.whatsappNumber));
   late final _vin = TextEditingController(text: widget.voter.vin ?? '');
+  late final _birthYear = TextEditingController(text: widget.voter.birthYear?.toString() ?? '');
+  late String? _gender = widget.voter.gender;
   final _notes = TextEditingController();
   String? _support;
   String? _pvcStatus;
@@ -36,7 +39,7 @@ class _VisitFormScreenState extends State<VisitFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_phone, _whatsapp, _vin, _notes]) {
+    for (final c in [_phone, _whatsapp, _vin, _birthYear, _notes]) {
       c.dispose();
     }
     super.dispose();
@@ -67,6 +70,8 @@ class _VisitFormScreenState extends State<VisitFormScreen> {
       reportedPhone: toE164(_phone.text),
       reportedWhatsapp: toE164(_whatsapp.text),
       reportedVin: normalizeVin(_vin.text),
+      reportedGender: _gender,
+      reportedBirthYear: parseBirthYear(_birthYear.text),
       latitude: pos?.latitude,
       longitude: pos?.longitude,
     ));
@@ -106,6 +111,17 @@ class _VisitFormScreenState extends State<VisitFormScreen> {
                   ),
               ],
             ),
+            _Section(
+              widget.voter.gender == null || widget.voter.birthYear == null
+                  ? 'Gender and age · confirm or fill in'
+                  : 'Gender and age',
+            ),
+            GenderYearFields(
+              gender: _gender,
+              onGenderChanged: (v) => setState(() => _gender = v),
+              birthYear: _birthYear,
+              helperText: widget.voter.birthYear == null ? 'Not on the list yet. Ask them.' : null,
+            ),
             _Section('Contact details'),
             TextFormField(
               controller: _phone,
@@ -127,11 +143,11 @@ class _VisitFormScreenState extends State<VisitFormScreen> {
               decoration: const InputDecoration(
                 labelText: 'VIN (on their PVC)',
                 prefixIcon: Icon(Icons.badge),
-                helperText: '19 letters and numbers',
+                helperText: '6 to 30 letters and numbers',
               ),
               validator: (v) {
                 final vin = normalizeVin(v ?? '');
-                return vin == null || isValidVin(vin) ? null : 'A VIN is 19 letters and numbers';
+                return vin == null || isValidVin(vin) ? null : 'A VIN is 6 to 30 letters and numbers';
               },
             ),
             _Section('Notes'),

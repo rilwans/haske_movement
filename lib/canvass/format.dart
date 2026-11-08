@@ -18,6 +18,12 @@ String timeAgo(DateTime at) {
   return '${d.inDays} days ago';
 }
 
+/// 15 Dec 2026.
+String shortDate(DateTime d) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${d.day} ${months[d.month - 1]} ${d.year}';
+}
+
 /// 12 Oct 2026, 14:05 in the phone's time zone.
 String dateTime(DateTime at) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -26,10 +32,36 @@ String dateTime(DateTime at) {
   return '${l.day} ${months[l.month - 1]} ${l.year}, ${two(l.hour)}:${two(l.minute)}';
 }
 
-/// VINs are 19 letters and digits; people type them with spaces or dashes.
+/// VINs are 6 to 30 letters and digits; people type them with spaces or dashes.
 String? normalizeVin(String input) {
   final v = input.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
   return v.isEmpty ? null : v;
 }
 
-bool isValidVin(String vin) => RegExp(r'^[0-9A-Z]{19}$').hasMatch(vin);
+bool isValidVin(String vin) => RegExp(r'^[0-9A-Z]{6,30}$').hasMatch(vin);
+
+/// A year of birth as typed, or null if blank.
+int? parseBirthYear(String input) => int.tryParse(input.trim());
+
+/// The check erims makes: a year from 1900 to this one.
+String? birthYearError(String? input) {
+  final t = (input ?? '').trim();
+  if (t.isEmpty) return null;
+  final y = int.tryParse(t);
+  final now = DateTime.now().year;
+  return y != null && y >= 1900 && y <= now ? null : 'Enter a year from 1900 to $now, or leave it blank';
+}
+
+/// 12345 → 12,345.
+String formatCount(int n) {
+  final s = n.abs().toString();
+  final b = StringBuffer(n < 0 ? '-' : '');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+    b.write(s[i]);
+  }
+  return b.toString();
+}
+
+/// [part] as a whole percentage of [whole], or null when there's no whole.
+int? percent(int part, int whole) => whole == 0 ? null : (part * 100 / whole).round();

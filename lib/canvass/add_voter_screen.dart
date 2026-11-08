@@ -5,6 +5,7 @@ import '../auth/phone.dart';
 import '../data/models.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'gender_year_fields.dart';
 import 'visit_form_screen.dart';
 
 /// Someone met who isn't on the polling unit's list. They're added at the
@@ -33,11 +34,13 @@ class _AddVoterScreenState extends State<AddVoterScreen> {
   final _whatsapp = TextEditingController();
   final _vin = TextEditingController();
   final _email = TextEditingController();
+  final _birthYear = TextEditingController();
+  String? _gender;
   bool _saving = false;
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _whatsapp, _vin, _email]) {
+    for (final c in [_name, _phone, _whatsapp, _vin, _email, _birthYear]) {
       c.dispose();
     }
     super.dispose();
@@ -55,6 +58,8 @@ class _AddVoterScreenState extends State<AddVoterScreen> {
       whatsappNumber: toE164(_whatsapp.text),
       vin: normalizeVin(_vin.text),
       email: email.isEmpty ? null : email,
+      gender: _gender,
+      birthYear: parseBirthYear(_birthYear.text),
       addedLocally: true,
       pending: true,
     );
@@ -81,6 +86,12 @@ class _AddVoterScreenState extends State<AddVoterScreen> {
               validator: (v) => (v ?? '').trim().isEmpty ? 'Enter their name' : null,
             ),
             const SizedBox(height: 12),
+            GenderYearFields(
+              gender: _gender,
+              onGenderChanged: (v) => setState(() => _gender = v),
+              birthYear: _birthYear,
+            ),
+            const SizedBox(height: 12),
             TextFormField(
               controller: _phone,
               keyboardType: TextInputType.phone,
@@ -105,7 +116,7 @@ class _AddVoterScreenState extends State<AddVoterScreen> {
               ),
               validator: (v) {
                 final vin = normalizeVin(v ?? '');
-                return vin == null || isValidVin(vin) ? null : 'A VIN is 19 letters and numbers';
+                return vin == null || isValidVin(vin) ? null : 'A VIN is 6 to 30 letters and numbers';
               },
             ),
             const SizedBox(height: 12),

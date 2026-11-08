@@ -60,6 +60,8 @@ class _VoterView extends StatelessWidget {
                 _Detail(Icons.phone, 'Phone', displayPhone(voter.phone)),
                 _Detail(Icons.chat, 'WhatsApp', displayPhone(voter.whatsappNumber)),
                 _Detail(Icons.badge, 'VIN', voter.vin ?? ''),
+                _Detail(Icons.wc, 'Gender', Options.gender[voter.gender] ?? ''),
+                _Detail(Icons.cake, 'Year of birth', voter.birthYear?.toString() ?? ''),
                 if (voter.email != null) _Detail(Icons.email, 'Email', voter.email!),
                 if (voter.addedLocally)
                   ListTile(
@@ -70,6 +72,22 @@ class _VoterView extends StatelessWidget {
               ],
             ),
           ),
+          // Someone else on the team visited them since this phone last did.
+          if (voter.latestVisitedAt != null &&
+              (visits.isEmpty || voter.latestVisitedAt!.isAfter(visits.first.visitedAt))) ...[
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.groups),
+                title: Text('Latest visit by your team · ${dateTime(voter.latestVisitedAt!)}'),
+                subtitle: Text([
+                  'Support: ${Options.support[voter.latestSupport] ?? 'not asked'}',
+                  'PVC: ${Options.pvcStatus[voter.latestPvcStatus] ?? 'not asked'}',
+                  'Plans to vote: ${Options.plansToVote[voter.latestPlansToVote] ?? 'not asked'}',
+                ].join('\n')),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Text(
             visits.isEmpty ? 'No conversations yet' : 'Conversations',
@@ -134,6 +152,11 @@ class _VisitCard extends StatelessWidget {
       if (visit.support != null) 'Support: ${Options.support[visit.support]}',
       if (visit.pvcStatus != null) 'PVC: ${Options.pvcStatus[visit.pvcStatus]}',
       if (visit.plansToVote != null) 'Plans to vote: ${Options.plansToVote[visit.plansToVote]}',
+      if (visit.reportedGender != null || visit.reportedBirthYear != null)
+        [
+          if (visit.reportedGender != null) Options.gender[visit.reportedGender],
+          if (visit.reportedBirthYear != null) 'Born ${visit.reportedBirthYear}',
+        ].join(', '),
       if (visit.issues.isNotEmpty) 'Issues: ${visit.issues.map((i) => Options.issues[i] ?? i).join(', ')}',
       if (visit.notes != null) visit.notes!,
     ];

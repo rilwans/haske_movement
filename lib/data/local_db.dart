@@ -7,8 +7,8 @@ import 'models.dart';
 
 /// The signed-in person's data on the device: the voters of the polling
 /// units they've downloaded, the voters they added, the visits they recorded
-/// and (coordinators) the canvassers they onboarded, so all of it works with
-/// no internet. Each login gets its own file, deleted when they sign out.
+/// and (coordinators) the canvassers and coordinators they onboarded,
+/// so all of it works with no internet. Each login gets its own file, deleted when they sign out.
 class LocalDb {
   LocalDb._(this._db, this._path);
 
@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 2,
+      version: 6,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -56,6 +56,10 @@ class LocalDb {
         await db.execute('create index visits_voter_id on visits (voter_id)');
         await db.execute('create index visits_synced on visits (synced)');
         await _createV2(db);
+        await _createV3(db);
+        await _createV4(db);
+        await _createV5(db);
+        await _createV6(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -64,6 +68,10 @@ class LocalDb {
           await db.delete('meta', where: 'key = ?', whereArgs: ['canvasser']);
           await _createV2(db);
         }
+        if (from < 3) await _createV3(db);
+        if (from < 4) await _createV4(db);
+        if (from < 5) await _createV5(db);
+        if (from < 6) await _createV6(db);
       },
     );
     return LocalDb._(db, path);
@@ -88,6 +96,64 @@ class LocalDb {
         sync_error text,
         login text
       )''');
+  }
+
+  /// Version 3: voters' gender and year of birth, and what a visit was told of them.
+  static Future<void> _createV3(Database db) async {
+    await db.execute('alter table voters add column gender text');
+    await db.execute('alter table voters add column birth_year integer');
+    await db.execute('alter table visits add column reported_gender text');
+    await db.execute('alter table visits add column reported_birth_year integer');
+  }
+
+  /// Version 4: the ward coordinators LGA coordinators add.
+  static Future<void> _createV4(Database db) async {
+    await db.execute('''
+      create table ward_coordinators (
+        id text primary key,
+        first_name text not null,
+        last_name text not null,
+        phone text not null,
+        whatsapp_number text,
+        email text,
+        ward_id text not null,
+        ward_name text not null,
+        created_at text not null,
+        pending integer not null default 1,
+        sync_error text,
+        login text
+      )''');
+  }
+
+  /// Version 5: each voter's latest visit by anyone, from the server, for
+  /// the lists of who to visit next.
+  static Future<void> _createV5(Database db) async {
+    await db.execute('alter table voters add column last_visited_at text');
+    await db.execute('alter table voters add column last_support text');
+    await db.execute('alter table voters add column last_pvc_status text');
+    await db.execute('alter table voters add column last_plans_to_vote text');
+  }
+
+  /// Version 6: the LGA coordinators state coordinators add, and where a
+  /// canvasser was onboarded, since a state coordinator's polling units
+  /// change with the LGA they've chosen.
+  static Future<void> _createV6(Database db) async {
+    await db.execute('''
+      create table lga_coordinators (
+        id text primary key,
+        first_name text not null,
+        last_name text not null,
+        phone text not null,
+        whatsapp_number text,
+        email text,
+        lga_id text not null,
+        lga_name text not null,
+        created_at text not null,
+        pending integer not null default 1,
+        sync_error text,
+        login text
+      )''');
+    await db.execute('alter table canvassers add column polling_unit_name text');
   }
 
   /// Closes and deletes this login's data, at sign-out.
@@ -123,12 +189,66 @@ class LocalDb {
 
   Future<void> setLastSyncedAt(DateTime at) => _setMeta('last_synced_at', at.toUtc().toIso8601String());
 
+  // --- Voter figures, kept for showing offline ----------------------------
+
+  static String _statsKey(String? lgaId, String? wardId, String? pollingUnitId) =>
+      'stats:${lgaId == null ? '' : '$lgaId:'}${wardId ?? ''}:${pollingUnitId ?? ''}';
+
+  /// The figures last fetched for an area, with when. [lgaId] is a state
+  /// coordinator's chosen LGA.
+  Future<VoterStats?> stats(String? wardId, String? pollingUnitId, {String? lgaId}) async {
+    final json = await _meta(_statsKey(lgaId, wardId, pollingUnitId));
+    return json == null ? null : VoterStats.fromJson(jsonDecode(json));
+  }
+
+  Future<void> saveStats(String? wardId, String? pollingUnitId, Map<String, dynamic> json, {String? lgaId}) =>
+      _setMeta(_statsKey(lgaId, wardId, pollingUnitId), jsonEncode(json));
+
+  /// Something else fetched from the server, kept under [key] for offline.
+  Future<Map<String, dynamic>?> cached(String key) async {
+    final json = await _meta('cache:$key');
+    return json == null ? null : jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  Future<void> saveCached(String key, Map<String, dynamic> json) => _setMeta('cache:$key', jsonEncode(json));
+
   // --- Voters -------------------------------------------------------------
 
-  /// Voters at [pollingUnitId] matching [search] (name, phone or VIN), with
-  /// how often they've been visited from this device.
-  Future<List<Voter>> voters(String pollingUnitId, {String search = '', bool? visited}) async {
-    final where = <String>['v.polling_unit_id = ?'];
+  /// Voters with how often they've been visited from this device, and their
+  /// latest visit by anyone: the server's, or one recorded here since.
+  static const _votersWithLatest = '''
+    select v.*,
+      (select count(*) from visits s where s.voter_id = v.id) as visit_count,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.visited_at else v.last_visited_at end
+        as latest_visited_at,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.support else v.last_support end
+        as latest_support,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.pvc_status else v.last_pvc_status end
+        as latest_pvc_status,
+      case when l.visited_at > coalesce(v.last_visited_at, '') then l.plans_to_vote else v.last_plans_to_vote end
+        as latest_plans_to_vote
+    from voters v
+    left join visits l on l.id = (
+      select s.id from visits s where s.voter_id = v.id order by s.visited_at desc, s.id desc limit 1
+    )
+  ''';
+
+  static const _supporters = "('strong_support', 'leaning_support')";
+
+  /// Who's in each [Lead], over [_votersWithLatest], as erims's lead lists.
+  static const _leadWhere = {
+    Lead.all: '1 = 1',
+    Lead.notReached: 'v.latest_visited_at is null',
+    Lead.persuadable: "v.latest_support in ('undecided', 'leaning_against')",
+    Lead.turnout: "v.latest_support in $_supporters and v.latest_pvc_status = 'has_pvc'",
+    Lead.pvc: "v.latest_support in $_supporters and v.latest_pvc_status in ('registered_no_pvc', 'not_registered')",
+    Lead.wavering: "v.latest_support in $_supporters and v.latest_plans_to_vote in ('unsure', 'no')",
+    Lead.visited: 'v.latest_visited_at is not null',
+  };
+
+  /// Voters at [pollingUnitId] in [lead] matching [search] (name, phone or VIN).
+  Future<List<Voter>> voters(String pollingUnitId, {String search = '', Lead lead = Lead.all}) async {
+    final where = <String>['v.polling_unit_id = ?', _leadWhere[lead]!];
     final args = <Object?>[pollingUnitId];
     final q = search.trim();
     if (q.isNotEmpty) {
@@ -139,25 +259,26 @@ class LocalDb {
       where.add('(v.name like ? or v.vin like ? or v.phone like ? or v.whatsapp_number like ?)');
       args.addAll([like, like.toUpperCase(), phoneLike, phoneLike]);
     }
-    if (visited != null) {
-      where.add(visited ? 'visit_count > 0' : 'visit_count = 0');
-    }
     final rows = await _db.rawQuery('''
-      select * from (
-        select v.*, (select count(*) from visits s where s.voter_id = v.id) as visit_count
-        from voters v
-      ) v
+      select * from ($_votersWithLatest) v
       where ${where.join(' and ')}
       order by v.name collate nocase
     ''', args);
     return rows.map(Voter.fromRow).toList();
   }
 
+  /// How many voters at [pollingUnitId] are in each [Lead].
+  Future<Map<Lead, int>> leadCounts(String pollingUnitId) async {
+    final sums = [for (final l in Lead.values) 'sum(case when ${_leadWhere[l]} then 1 else 0 end) as lead_${l.name}'];
+    final rows = await _db.rawQuery(
+      'select ${sums.join(', ')} from ($_votersWithLatest) v where v.polling_unit_id = ?',
+      [pollingUnitId],
+    );
+    return {for (final l in Lead.values) l: (rows.first['lead_${l.name}'] as int?) ?? 0};
+  }
+
   Future<Voter?> voter(String id) async {
-    final rows = await _db.rawQuery('''
-      select v.*, (select count(*) from visits s where s.voter_id = v.id) as visit_count
-      from voters v where v.id = ?
-    ''', [id]);
+    final rows = await _db.rawQuery('select * from ($_votersWithLatest) v where v.id = ?', [id]);
     return rows.isEmpty ? null : Voter.fromRow(rows.first);
   }
 
@@ -170,6 +291,8 @@ class LocalDb {
         'phone': v.phone,
         'whatsapp_number': v.whatsappNumber,
         'email': v.email,
+        'gender': v.gender,
+        'birth_year': v.birthYear,
         'added_locally': 1,
         'pending': 1,
       });
@@ -196,6 +319,15 @@ class LocalDb {
               'phone': r['phone'],
               'whatsapp_number': r['whatsapp_number'],
               'email': r['email'],
+              'gender': r['gender'],
+              'birth_year': r['birth_year'],
+              // As the phone stores its own visits' times, so the two compare.
+              'last_visited_at': r['last_visited_at'] == null
+                  ? null
+                  : DateTime.parse(r['last_visited_at'] as String).toUtc().toIso8601String(),
+              'last_support': r['last_support'],
+              'last_pvc_status': r['last_pvc_status'],
+              'last_plans_to_vote': r['last_plans_to_vote'],
             },
             conflictAlgorithm: ConflictAlgorithm.ignore,
           );
@@ -248,9 +380,35 @@ class LocalDb {
   Future<List<NewCanvasser>> pendingCanvassers() async =>
       (await _db.query('canvassers', where: 'pending = 1', orderBy: 'created_at')).map(NewCanvasser.fromRow).toList();
 
-  /// Whether this phone already onboarded someone with [phone].
-  Future<bool> hasCanvasserPhone(String phone) async =>
-      (await _db.query('canvassers', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
+  /// Whether this phone already onboarded someone, of either kind, with [phone].
+  Future<bool> hasOnboardedPhone(String phone) async =>
+      (await _db.query('canvassers', where: 'phone = ?', whereArgs: [phone])).isNotEmpty ||
+      (await _db.query('ward_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty ||
+      (await _db.query('lga_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
+
+  // --- LGA coordinators a state coordinator added -------------------------
+
+  Future<void> addLgaCoordinator(NewLgaCoordinator c) => _db.insert('lga_coordinators', c.toRow());
+
+  Future<List<NewLgaCoordinator>> lgaCoordinators() async =>
+      (await _db.query('lga_coordinators', orderBy: 'created_at desc')).map(NewLgaCoordinator.fromRow).toList();
+
+  Future<List<NewLgaCoordinator>> pendingLgaCoordinators() async =>
+      (await _db.query('lga_coordinators', where: 'pending = 1', orderBy: 'created_at'))
+          .map(NewLgaCoordinator.fromRow)
+          .toList();
+
+  // --- Ward coordinators an LGA or state coordinator added ----------------
+
+  Future<void> addWardCoordinator(NewWardCoordinator c) => _db.insert('ward_coordinators', c.toRow());
+
+  Future<List<NewWardCoordinator>> wardCoordinators() async =>
+      (await _db.query('ward_coordinators', orderBy: 'created_at desc')).map(NewWardCoordinator.fromRow).toList();
+
+  Future<List<NewWardCoordinator>> pendingWardCoordinators() async =>
+      (await _db.query('ward_coordinators', where: 'pending = 1', orderBy: 'created_at'))
+          .map(NewWardCoordinator.fromRow)
+          .toList();
 
   // --- What's waiting to sync ---------------------------------------------
 
@@ -264,7 +422,9 @@ class LocalDb {
     final r = await _db.rawQuery('''
       select (select count(*) from voters where pending = 1)
            + (select count(*) from visits where synced = 0)
-           + (select count(*) from canvassers where pending = 1) as n
+           + (select count(*) from canvassers where pending = 1)
+           + (select count(*) from ward_coordinators where pending = 1)
+           + (select count(*) from lga_coordinators where pending = 1) as n
     ''');
     return r.first['n'] as int;
   }
@@ -273,17 +433,20 @@ class LocalDb {
     final r = await _db.rawQuery('''
       select (select count(*) from voters where pending = 1 and sync_error is not null)
            + (select count(*) from visits where synced = 0 and sync_error is not null)
-           + (select count(*) from canvassers where sync_error is not null) as n
+           + (select count(*) from canvassers where sync_error is not null)
+           + (select count(*) from ward_coordinators where sync_error is not null)
+           + (select count(*) from lga_coordinators where sync_error is not null) as n
     ''');
     return r.first['n'] as int;
   }
 
-  /// Applies canvass_sync()'s answer for the canvassers it was sent.
-  Future<void> markCanvassersSynced(List<Map<String, dynamic>> results) => _db.transaction((tx) async {
+  /// Applies the server's answer for the people of [table] ('canvassers',
+  /// 'ward_coordinators' or 'lga_coordinators') it was sent.
+  Future<void> markOnboardedSynced(String table, List<Map<String, dynamic>> results) => _db.transaction((tx) async {
         for (final r in results) {
           final ok = r['status'] == 'ok';
           await tx.update(
-            'canvassers',
+            table,
             ok ? {'pending': 0, 'sync_error': null, 'login': r['login'] ?? 'pending'} : {'sync_error': r['error'] ?? 'Not accepted'},
             where: 'id = ?',
             whereArgs: [r['id']],
@@ -291,17 +454,17 @@ class LocalDb {
         }
       });
 
-  /// Sent canvassers whose login hasn't been made yet.
-  Future<List<String>> canvassersAwaitingLogin() async =>
-      (await _db.query('canvassers', columns: ['id'], where: "pending = 0 and coalesce(login, '') <> 'made'"))
+  /// The people of [table] sent whose login hasn't been made yet.
+  Future<List<String>> awaitingLogin(String table) async =>
+      (await _db.query(table, columns: ['id'], where: "pending = 0 and coalesce(login, '') <> 'made'"))
           .map((r) => r['id'] as String)
           .toList();
 
   /// Applies the canvasser-logins function's answer: a login made, or why not.
-  Future<void> markLogins(List<Map<String, dynamic>> results) => _db.transaction((tx) async {
+  Future<void> markLogins(String table, List<Map<String, dynamic>> results) => _db.transaction((tx) async {
         for (final r in results) {
           await tx.update(
-            'canvassers',
+            table,
             {'login': r['login'] ?? 'pending', 'sync_error': r['error']},
             where: 'id = ?',
             whereArgs: [r['id']],
