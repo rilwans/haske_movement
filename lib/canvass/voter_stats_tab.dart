@@ -530,8 +530,10 @@ class _Filters extends StatelessWidget {
       children: [
         Row(
           children: [
-            Expanded(child: fixed('LGA', lgaName)),
-            const SizedBox(width: 8),
+            if (!p.isStateCoordinator) ...[
+              Expanded(child: fixed('LGA', lgaName)),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: !p.coversWards
                   ? fixed('Ward', p.wardName ?? '')
