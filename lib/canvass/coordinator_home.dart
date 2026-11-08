@@ -7,6 +7,7 @@ import '../theme.dart';
 import 'account_menu.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'lga_choice.dart';
 import 'onboard_canvasser_screen.dart';
 import 'sync_bar.dart';
 import 'targets_tab.dart';
@@ -15,9 +16,10 @@ import 'voter_list_screen.dart';
 import 'voter_stats_tab.dart';
 import 'ward_filter.dart';
 
-/// A ward or LGA coordinator's home: the polling units in their area to
-/// canvass, the voter figures for it, its wards' targets, and their team:
-/// what each has done, and who they've onboarded from this phone.
+/// A ward, LGA or state coordinator's home: the polling units in their area
+/// to canvass, the voter figures for it, its wards' targets, and their team:
+/// what each has done, and who they've onboarded from this phone. A state
+/// coordinator chooses an LGA and sees these as its coordinator would.
 class CoordinatorHome extends StatefulWidget {
   const CoordinatorHome({super.key});
 
@@ -37,40 +39,60 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
   final _opened = <int>{0};
 
   Future<void> _add(AppProfile p) async {
-    if (!p.isLgaCoordinator) {
+    if (!p.coversWards) {
       await openScreen(context, const OnboardCanvasserScreen());
       return;
     }
-    final wardCoordinator = await showModalBottomSheet<bool>(
+    final where = p.isStateCoordinator ? p.lgaName : 'your LGA';
+    final screen = await showModalBottomSheet<Widget>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.person_add),
-              title: const Text('Onboard canvasser'),
-              subtitle: const Text('At a polling unit in your LGA'),
-              onTap: () => Navigator.pop(context, false),
-            ),
-            ListTile(
-              leading: const Icon(Icons.supervisor_account),
-              title: const Text('Add ward coordinator'),
-              subtitle: const Text('For a ward in your LGA'),
-              onTap: () => Navigator.pop(context, true),
-            ),
+            if (where != null) ...[
+              ListTile(
+                leading: const Icon(Icons.person_add),
+                title: const Text('Onboard canvasser'),
+                subtitle: Text('At a polling unit in $where'),
+                onTap: () =>
+                    Navigator.pop(context, const OnboardCanvasserScreen()),
+              ),
+              ListTile(
+                leading: const Icon(Icons.supervisor_account),
+                title: const Text('Add ward coordinator'),
+                subtitle: Text('For a ward in $where'),
+                onTap: () => Navigator.pop(
+                  context,
+                  const OnboardCanvasserScreen.wardCoordinator(),
+                ),
+              ),
+            ],
+            if (p.isStateCoordinator)
+              ListTile(
+                leading: const Icon(Icons.admin_panel_settings_outlined),
+                title: const Text('Add LGA coordinator'),
+                subtitle: Text('For an LGA in ${p.stateName}'),
+                onTap: () => Navigator.pop(
+                  context,
+                  const OnboardCanvasserScreen.lgaCoordinator(),
+                ),
+              ),
+            if (where == null)
+              const ListTile(
+                enabled: false,
+                leading: Icon(Icons.info_outline),
+                title: Text(
+                  'Choose an LGA to add ward coordinators and canvassers.',
+                ),
+              ),
           ],
         ),
       ),
     );
-    if (wardCoordinator == null || !mounted) return;
-    await openScreen(
-      context,
-      wardCoordinator
-          ? const OnboardCanvasserScreen.wardCoordinator()
-          : const OnboardCanvasserScreen(),
-    );
+    if (screen == null || !mounted) return;
+    await openScreen(context, screen);
   }
 
   @override
@@ -79,6 +101,9 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
     final theme = Theme.of(context);
     Widget lazy(int i, Widget tab) =>
         _opened.contains(i) ? tab : const SizedBox.shrink();
+    // A state coordinator's tabs start afresh in each LGA they move to.
+    final lgaKey = ValueKey(p.selectedLgaId);
+    final needsLga = p.isStateCoordinator && p.selectedLgaId == null;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -93,13 +118,25 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
       body: Column(
         children: [
           const SyncBar(),
+          if (p.isStateCoordinator) const LgaBar(),
           Expanded(
             child: IndexedStack(
               index: _tab,
               children: [
-                const _PollingUnitsTab(),
-                lazy(1, const VoterStatsTab()),
-                lazy(2, const TargetsTab()),
+                needsLga
+                    ? const ChooseLga(
+                        reason: 'Choose an LGA to see its polling units.',
+                      )
+                    : _PollingUnitsTab(key: lgaKey),
+                lazy(1, VoterStatsTab(key: lgaKey)),
+                lazy(
+                  2,
+                  needsLga
+                      ? const ChooseLga(
+                          reason: "Choose an LGA to see its wards' targets.",
+                        )
+                      : TargetsTab(key: lgaKey),
+                ),
                 lazy(
                   3,
                   Column(
@@ -129,7 +166,7 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
                       Expanded(
                         child: _addedHere
                             ? const _AddedHereTab()
-                            : const TeamActivityTab(),
+                            : TeamActivityTab(key: lgaKey),
                       ),
                     ],
                   ),
@@ -143,7 +180,7 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
           ? FloatingActionButton.extended(
               onPressed: () => _add(p),
               icon: const Icon(Icons.person_add),
-              label: Text(p.isLgaCoordinator ? 'Add' : 'Onboard canvasser'),
+              label: Text(p.coversWards ? 'Add' : 'Onboard canvasser'),
             )
           : null,
       bottomNavigationBar: NavigationBar(
@@ -182,7 +219,7 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
 /// Every polling unit in the area. One with its voters on the phone opens
 /// offline; any other is downloaded first, which needs internet.
 class _PollingUnitsTab extends StatefulWidget {
-  const _PollingUnitsTab();
+  const _PollingUnitsTab({super.key});
 
   @override
   State<_PollingUnitsTab> createState() => _PollingUnitsTabState();
@@ -302,7 +339,7 @@ class _PollingUnitsTabState extends State<_PollingUnitsTab> {
   }
 }
 
-/// The canvassers, and an LGA coordinator's ward coordinators, onboarded
+/// The canvassers, and an LGA or state coordinator's coordinators, onboarded
 /// from this phone, and whether they can sign in yet.
 class _AddedHereTab extends StatelessWidget {
   const _AddedHereTab();
@@ -312,19 +349,29 @@ class _AddedHereTab extends StatelessWidget {
     final s = CanvassScope.of(context);
     return FutureBuilder(
       key: ValueKey(s.revision),
-      future: Future.wait([s.db.wardCoordinators(), s.db.canvassers()]),
+      future: Future.wait([
+        s.db.wardCoordinators(),
+        s.db.canvassers(),
+        s.db.lgaCoordinators(),
+      ]),
       builder: (context, snap) {
         if (snap.data == null) {
           return const Center(child: CircularProgressIndicator());
         }
         final wardCoordinators = snap.data![0] as List<NewWardCoordinator>;
         final canvassers = snap.data![1] as List<NewCanvasser>;
-        if (wardCoordinators.isEmpty && canvassers.isEmpty) {
+        final lgaCoordinators = snap.data![2] as List<NewLgaCoordinator>;
+        if (lgaCoordinators.isEmpty &&
+            wardCoordinators.isEmpty &&
+            canvassers.isEmpty) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(32),
               child: Text(
-                s.profile!.isLgaCoordinator
+                s.profile!.isStateCoordinator
+                    ? "Coordinators and canvassers you add appear here. You can add them "
+                          "offline; they can sign in once it's sent."
+                    : s.profile!.isLgaCoordinator
                     ? "Canvassers and ward coordinators you add appear here. You can add them "
                           "offline; they can sign in once it's sent."
                     : "Canvassers you onboard appear here. You can onboard them offline; "
@@ -341,6 +388,19 @@ class _AddedHereTab extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.only(bottom: 88),
           children: [
+            if (lgaCoordinators.isNotEmpty) ...[
+              heading('LGA coordinators'),
+              for (final c in lgaCoordinators)
+                _OnboardedTile(
+                  name: c.fullName,
+                  where: '${c.lgaName} LGA',
+                  createdAt: c.createdAt,
+                  phone: c.phone,
+                  pending: c.pending,
+                  syncError: c.syncError,
+                  login: c.login,
+                ),
+            ],
             if (wardCoordinators.isNotEmpty) ...[
               heading('Ward coordinators'),
               for (final c in wardCoordinators)
@@ -355,11 +415,13 @@ class _AddedHereTab extends StatelessWidget {
                 ),
             ],
             if (canvassers.isNotEmpty) ...[
-              if (wardCoordinators.isNotEmpty) heading('Canvassers'),
+              if (wardCoordinators.isNotEmpty || lgaCoordinators.isNotEmpty)
+                heading('Canvassers'),
               for (final c in canvassers)
                 _OnboardedTile(
                   name: c.fullName,
                   where:
+                      c.pollingUnitName ??
                       s.profile!.pollingUnit(c.pollingUnitId)?.name ??
                       'Polling unit',
                   createdAt: c.createdAt,

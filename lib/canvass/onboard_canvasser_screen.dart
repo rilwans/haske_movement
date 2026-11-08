@@ -5,18 +5,24 @@ import '../auth/phone.dart';
 import '../config.dart';
 import '../data/models.dart';
 import 'canvass_shell.dart';
+import 'lga_choice.dart';
 import 'ward_filter.dart';
 
-/// A coordinator adds a canvasser at a polling unit in their area, or an LGA
-/// coordinator a ward coordinator for a ward in theirs. Saved on the phone;
+enum _Adding { canvasser, wardCoordinator, lgaCoordinator }
+
+/// A coordinator adds a canvasser at a polling unit in their area, an LGA or
+/// state coordinator a ward coordinator for a ward in theirs, or a state
+/// coordinator an LGA coordinator for an LGA in theirs. Saved on the phone;
 /// erims makes the person and their login when it's sent, and records this
 /// coordinator as who onboarded them.
 class OnboardCanvasserScreen extends StatefulWidget {
-  const OnboardCanvasserScreen({super.key}) : wardCoordinator = false;
+  const OnboardCanvasserScreen({super.key}) : _adding = _Adding.canvasser;
 
-  const OnboardCanvasserScreen.wardCoordinator({super.key}) : wardCoordinator = true;
+  const OnboardCanvasserScreen.wardCoordinator({super.key}) : _adding = _Adding.wardCoordinator;
 
-  final bool wardCoordinator;
+  const OnboardCanvasserScreen.lgaCoordinator({super.key}) : _adding = _Adding.lgaCoordinator;
+
+  final _Adding _adding;
 
   @override
   State<OnboardCanvasserScreen> createState() => _OnboardCanvasserScreenState();
@@ -31,9 +37,11 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
   final _email = TextEditingController();
   PollingUnit? _pollingUnit;
   Ward? _ward;
+  Lga? _lga;
   bool _saving = false;
 
-  bool get _forWard => widget.wardCoordinator;
+  bool get _forWard => widget._adding == _Adding.wardCoordinator;
+  bool get _forLga => widget._adding == _Adding.lgaCoordinator;
 
   @override
   void dispose() {
@@ -65,6 +73,17 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
     if (picked != null) setState(() => _ward = picked);
   }
 
+  Future<void> _pickLga() async {
+    final lgas = CanvassScope.read(context).profile!.lgas;
+    final picked = await showModalBottomSheet<(Lga?,)>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => LgaPicker(lgas: lgas),
+    );
+    if (picked != null) setState(() => _lga = picked.$1);
+  }
+
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
     final service = CanvassScope.read(context);
@@ -78,7 +97,19 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
     }
     setState(() => _saving = true);
     final email = _email.text.trim().toLowerCase();
-    if (_forWard) {
+    if (_forLga) {
+      await service.addLgaCoordinator(NewLgaCoordinator(
+        id: const Uuid().v4(),
+        firstName: _firstName.text.trim(),
+        lastName: _lastName.text.trim(),
+        phone: phone,
+        whatsappNumber: toE164(_whatsapp.text),
+        email: email.isEmpty ? null : email,
+        lgaId: _lga!.id,
+        lgaName: _lga!.name,
+        createdAt: DateTime.now(),
+      ));
+    } else if (_forWard) {
       await service.addWardCoordinator(NewWardCoordinator(
         id: const Uuid().v4(),
         firstName: _firstName.text.trim(),
@@ -99,6 +130,7 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
         whatsappNumber: toE164(_whatsapp.text),
         email: email.isEmpty ? null : email,
         pollingUnitId: _pollingUnit!.id,
+        pollingUnitName: _pollingUnit!.name,
         createdAt: DateTime.now(),
       ));
     }
@@ -113,7 +145,7 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(_forWard ? 'Add ward coordinator' : 'Onboard canvasser')),
+      appBar: AppBar(title: Text(_forLga ? 'Add LGA coordinator' : _forWard ? 'Add ward coordinator' : 'Onboard canvasser')),
       body: Form(
         key: _form,
         child: ListView(
@@ -162,7 +194,26 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
                   : 'Enter a valid email, or leave it blank',
             ),
             const SizedBox(height: 12),
-            if (_forWard)
+            if (_forLga)
+              FormField<Lga>(
+                validator: (_) => _lga == null ? 'Choose the LGA they will coordinate' : null,
+                builder: (field) => InkWell(
+                  onTap: () async {
+                    await _pickLga();
+                    field.didChange(_lga);
+                  },
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'LGA',
+                      prefixIcon: const Icon(Icons.map_outlined),
+                      suffixIcon: const Icon(Icons.arrow_drop_down),
+                      errorText: field.errorText,
+                    ),
+                    child: Text(_lga == null ? 'Choose' : _lga!.name),
+                  ),
+                ),
+              )
+            else if (_forWard)
               FormField<Ward>(
                 validator: (_) => _ward == null ? 'Choose the ward they will coordinate' : null,
                 builder: (field) => InkWell(
@@ -206,7 +257,7 @@ class _OnboardCanvasserScreenState extends State<OnboardCanvasserScreen> {
             Text(
               'Saved on this phone and sent when you have internet. They then sign in with '
               'their phone number and the password ${Config.defaultPassword}, and choose their own.'
-              '${_forWard ? ' They can then onboard canvassers in their ward.' : ''}',
+              '${_forLga ? ' They can then add ward coordinators and canvassers in their LGA.' : _forWard ? ' They can then onboard canvassers in their ward.' : ''}',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall,
             ),

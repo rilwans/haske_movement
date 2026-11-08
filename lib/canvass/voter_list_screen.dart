@@ -71,7 +71,7 @@ class _VoterListScreenState extends State<VoterListScreen> {
           children: [
             Text(pu.name, overflow: TextOverflow.ellipsis),
             Text(
-              '${pu.code} · ${pu.wardName}, ${profile.lgaName}',
+              '${pu.code} · ${pu.wardName}, ${profile.lgaName ?? profile.stateName}',
               style: theme.textTheme.bodySmall,
               overflow: TextOverflow.ellipsis,
             ),

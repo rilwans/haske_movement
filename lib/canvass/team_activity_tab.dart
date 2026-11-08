@@ -45,8 +45,8 @@ enum _Sort {
       };
 }
 
-/// What a coordinator's team has done: each canvasser's (and, for an LGA
-/// coordinator, ward coordinator's) visits in a period, who's gone quiet,
+/// What a coordinator's team has done: each canvasser's (and, for an LGA or
+/// state coordinator, coordinator's) visits in a period, who's gone quiet,
 /// and visits to check. Needs internet; the last figures show offline.
 class TeamActivityTab extends StatefulWidget {
   const TeamActivityTab({super.key});
@@ -77,7 +77,7 @@ class _TeamActivityTabState extends State<TeamActivityTab> {
       _loading = true;
       _error = null;
     });
-    final cached = await s.db.cached(CanvassService.teamActivityKey(ward, since));
+    final cached = await s.db.cached(CanvassService.teamActivityKey(ward, since, s.profile?.selectedLgaId));
     if (!mounted || request != _request) return;
     setState(() => _activity = cached == null ? null : TeamActivity.fromJson(cached));
     try {
@@ -115,7 +115,7 @@ class _TeamActivityTabState extends State<TeamActivityTab> {
               _load();
             },
           ),
-          if (p.isLgaCoordinator) ...[
+          if (p.coversWards && p.wards.isNotEmpty) ...[
             const SizedBox(height: 8),
             DropdownButtonFormField<String?>(
               initialValue: _wardId,

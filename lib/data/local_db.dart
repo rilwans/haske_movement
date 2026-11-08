@@ -7,7 +7,7 @@ import 'models.dart';
 
 /// The signed-in person's data on the device: the voters of the polling
 /// units they've downloaded, the voters they added, the visits they recorded
-/// and (coordinators) the canvassers and ward coordinators they onboarded,
+/// and (coordinators) the canvassers and coordinators they onboarded,
 /// so all of it works with no internet. Each login gets its own file, deleted when they sign out.
 class LocalDb {
   LocalDb._(this._db, this._path);
@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -59,6 +59,7 @@ class LocalDb {
         await _createV3(db);
         await _createV4(db);
         await _createV5(db);
+        await _createV6(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -70,6 +71,7 @@ class LocalDb {
         if (from < 3) await _createV3(db);
         if (from < 4) await _createV4(db);
         if (from < 5) await _createV5(db);
+        if (from < 6) await _createV6(db);
       },
     );
     return LocalDb._(db, path);
@@ -132,6 +134,28 @@ class LocalDb {
     await db.execute('alter table voters add column last_plans_to_vote text');
   }
 
+  /// Version 6: the LGA coordinators state coordinators add, and where a
+  /// canvasser was onboarded, since a state coordinator's polling units
+  /// change with the LGA they've chosen.
+  static Future<void> _createV6(Database db) async {
+    await db.execute('''
+      create table lga_coordinators (
+        id text primary key,
+        first_name text not null,
+        last_name text not null,
+        phone text not null,
+        whatsapp_number text,
+        email text,
+        lga_id text not null,
+        lga_name text not null,
+        created_at text not null,
+        pending integer not null default 1,
+        sync_error text,
+        login text
+      )''');
+    await db.execute('alter table canvassers add column polling_unit_name text');
+  }
+
   /// Closes and deletes this login's data, at sign-out.
   Future<void> destroy() async {
     await _db.close();
@@ -167,16 +191,18 @@ class LocalDb {
 
   // --- Voter figures, kept for showing offline ----------------------------
 
-  static String _statsKey(String? wardId, String? pollingUnitId) => 'stats:${wardId ?? ''}:${pollingUnitId ?? ''}';
+  static String _statsKey(String? lgaId, String? wardId, String? pollingUnitId) =>
+      'stats:${lgaId == null ? '' : '$lgaId:'}${wardId ?? ''}:${pollingUnitId ?? ''}';
 
-  /// The figures last fetched for an area, with when.
-  Future<VoterStats?> stats(String? wardId, String? pollingUnitId) async {
-    final json = await _meta(_statsKey(wardId, pollingUnitId));
+  /// The figures last fetched for an area, with when. [lgaId] is a state
+  /// coordinator's chosen LGA.
+  Future<VoterStats?> stats(String? wardId, String? pollingUnitId, {String? lgaId}) async {
+    final json = await _meta(_statsKey(lgaId, wardId, pollingUnitId));
     return json == null ? null : VoterStats.fromJson(jsonDecode(json));
   }
 
-  Future<void> saveStats(String? wardId, String? pollingUnitId, Map<String, dynamic> json) =>
-      _setMeta(_statsKey(wardId, pollingUnitId), jsonEncode(json));
+  Future<void> saveStats(String? wardId, String? pollingUnitId, Map<String, dynamic> json, {String? lgaId}) =>
+      _setMeta(_statsKey(lgaId, wardId, pollingUnitId), jsonEncode(json));
 
   /// Something else fetched from the server, kept under [key] for offline.
   Future<Map<String, dynamic>?> cached(String key) async {
@@ -357,9 +383,22 @@ class LocalDb {
   /// Whether this phone already onboarded someone, of either kind, with [phone].
   Future<bool> hasOnboardedPhone(String phone) async =>
       (await _db.query('canvassers', where: 'phone = ?', whereArgs: [phone])).isNotEmpty ||
-      (await _db.query('ward_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
+      (await _db.query('ward_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty ||
+      (await _db.query('lga_coordinators', where: 'phone = ?', whereArgs: [phone])).isNotEmpty;
 
-  // --- Ward coordinators an LGA coordinator added -------------------------
+  // --- LGA coordinators a state coordinator added -------------------------
+
+  Future<void> addLgaCoordinator(NewLgaCoordinator c) => _db.insert('lga_coordinators', c.toRow());
+
+  Future<List<NewLgaCoordinator>> lgaCoordinators() async =>
+      (await _db.query('lga_coordinators', orderBy: 'created_at desc')).map(NewLgaCoordinator.fromRow).toList();
+
+  Future<List<NewLgaCoordinator>> pendingLgaCoordinators() async =>
+      (await _db.query('lga_coordinators', where: 'pending = 1', orderBy: 'created_at'))
+          .map(NewLgaCoordinator.fromRow)
+          .toList();
+
+  // --- Ward coordinators an LGA or state coordinator added ----------------
 
   Future<void> addWardCoordinator(NewWardCoordinator c) => _db.insert('ward_coordinators', c.toRow());
 
@@ -384,7 +423,8 @@ class LocalDb {
       select (select count(*) from voters where pending = 1)
            + (select count(*) from visits where synced = 0)
            + (select count(*) from canvassers where pending = 1)
-           + (select count(*) from ward_coordinators where pending = 1) as n
+           + (select count(*) from ward_coordinators where pending = 1)
+           + (select count(*) from lga_coordinators where pending = 1) as n
     ''');
     return r.first['n'] as int;
   }
@@ -394,13 +434,14 @@ class LocalDb {
       select (select count(*) from voters where pending = 1 and sync_error is not null)
            + (select count(*) from visits where synced = 0 and sync_error is not null)
            + (select count(*) from canvassers where sync_error is not null)
-           + (select count(*) from ward_coordinators where sync_error is not null) as n
+           + (select count(*) from ward_coordinators where sync_error is not null)
+           + (select count(*) from lga_coordinators where sync_error is not null) as n
     ''');
     return r.first['n'] as int;
   }
 
-  /// Applies the server's answer for the people of [table] ('canvassers' or
-  /// 'ward_coordinators') it was sent.
+  /// Applies the server's answer for the people of [table] ('canvassers',
+  /// 'ward_coordinators' or 'lga_coordinators') it was sent.
   Future<void> markOnboardedSynced(String table, List<Map<String, dynamic>> results) => _db.transaction((tx) async {
         for (final r in results) {
           final ok = r['status'] == 'ok';

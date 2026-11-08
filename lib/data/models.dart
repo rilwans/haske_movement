@@ -32,8 +32,28 @@ class Ward {
   final int pollingUnits;
 }
 
+/// An LGA in a state coordinator's state, with how much is in it.
+class Lga {
+  const Lga({required this.id, required this.name, required this.wards, required this.pollingUnits});
+
+  final String id;
+  final String name;
+  final int wards;
+  final int pollingUnits;
+
+  factory Lga.fromJson(Map<String, dynamic> j) => Lga(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        wards: j['wards'] as int,
+        pollingUnits: j['polling_units'] as int,
+      );
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'wards': wards, 'polling_units': pollingUnits};
+}
+
 /// Who is signed in, from my_app_profile(): a canvasser at one polling
-/// unit, or a ward or LGA coordinator with every polling unit in their area.
+/// unit, a ward or LGA coordinator with every polling unit in their area, or
+/// a state coordinator with the polling units of the LGA they've chosen.
 class AppProfile {
   const AppProfile({
     required this.role,
@@ -45,33 +65,75 @@ class AppProfile {
     required this.lgaName,
     required this.wardName,
     required this.pollingUnits,
+    this.lgas = const [],
+    this.selectedLgaId,
   });
 
-  /// 'canvasser', 'ward_coordinator' or 'lga_coordinator'.
+  /// 'canvasser', 'ward_coordinator', 'lga_coordinator' or 'state_coordinator'.
   final String role;
   final String personId;
   final String firstName;
   final String lastName;
   final String phone;
   final String stateName;
-  final String lgaName;
 
-  /// Null for an LGA coordinator.
+  /// A state coordinator's chosen LGA; null while they're on the whole state.
+  final String? lgaName;
+
+  /// Null for an LGA or state coordinator.
   final String? wardName;
   final List<PollingUnit> pollingUnits;
 
+  /// A state coordinator's LGAs; empty for anyone else.
+  final List<Lga> lgas;
+
+  /// The LGA a state coordinator is working in, kept on the phone.
+  final String? selectedLgaId;
+
   bool get isCoordinator => role != 'canvasser';
   bool get isLgaCoordinator => role == 'lga_coordinator';
+  bool get isStateCoordinator => role == 'state_coordinator';
+
+  /// Whether they work across wards, so choose among them and add coordinators.
+  bool get coversWards => isLgaCoordinator || isStateCoordinator;
   String get fullName => '$firstName $lastName';
 
   String get roleLabel => switch (role) {
         'ward_coordinator' => 'Ward coordinator',
         'lga_coordinator' => 'LGA coordinator',
+        'state_coordinator' => 'State coordinator',
         _ => 'Canvasser',
       };
 
-  /// "Boriya/Shiya ward, Baruten" or "Baruten LGA".
-  String get areaLabel => wardName != null ? '$wardName ward, $lgaName' : '$lgaName LGA';
+  /// "Boriya/Shiya ward, Baruten", "Baruten LGA" or "Kwara State".
+  String get areaLabel => isStateCoordinator
+      ? '$stateName State'
+      : wardName != null
+          ? '$wardName ward, $lgaName'
+          : '$lgaName LGA';
+
+  Lga? lga(String? id) {
+    for (final l in lgas) {
+      if (l.id == id) return l;
+    }
+    return null;
+  }
+
+  /// This state coordinator working in [lga], with its [units], or across
+  /// the state when null.
+  AppProfile forLga(Lga? lga, List<PollingUnit> units) => AppProfile(
+        role: role,
+        personId: personId,
+        firstName: firstName,
+        lastName: lastName,
+        phone: phone,
+        stateName: stateName,
+        lgaName: lga?.name,
+        wardName: wardName,
+        pollingUnits: units,
+        lgas: lgas,
+        selectedLgaId: lga?.id,
+      );
 
   PollingUnit? pollingUnit(String id) {
     for (final p in pollingUnits) {
@@ -109,11 +171,15 @@ class AppProfile {
         lastName: j['last_name'] as String,
         phone: j['phone'] as String,
         stateName: j['state_name'] as String,
-        lgaName: j['lga_name'] as String,
+        lgaName: j['lga_name'] as String?,
         wardName: j['ward_name'] as String?,
         pollingUnits: [
           for (final p in (j['polling_units'] as List)) PollingUnit.fromJson(p as Map<String, dynamic>),
         ],
+        lgas: [
+          for (final l in (j['lgas'] as List? ?? const [])) Lga.fromJson(l as Map<String, dynamic>),
+        ],
+        selectedLgaId: j['selected_lga_id'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -126,6 +192,8 @@ class AppProfile {
         'lga_name': lgaName,
         'ward_name': wardName,
         'polling_units': pollingUnits.map((p) => p.toJson()).toList(),
+        'lgas': lgas.map((l) => l.toJson()).toList(),
+        'selected_lga_id': selectedLgaId,
       };
 }
 
@@ -139,6 +207,7 @@ class NewCanvasser {
     required this.phone,
     required this.pollingUnitId,
     required this.createdAt,
+    this.pollingUnitName,
     this.whatsappNumber,
     this.email,
     this.pending = true,
@@ -153,6 +222,9 @@ class NewCanvasser {
   final String? whatsappNumber;
   final String? email;
   final String pollingUnitId;
+
+  /// Null for one saved before the name was kept.
+  final String? pollingUnitName;
   final DateTime createdAt;
   final bool pending;
   final String? syncError;
@@ -170,6 +242,7 @@ class NewCanvasser {
         whatsappNumber: r['whatsapp_number'] as String?,
         email: r['email'] as String?,
         pollingUnitId: r['polling_unit_id'] as String,
+        pollingUnitName: r['polling_unit_name'] as String?,
         createdAt: DateTime.parse(r['created_at'] as String),
         pending: r['pending'] == 1,
         syncError: r['sync_error'] as String?,
@@ -184,6 +257,7 @@ class NewCanvasser {
         'whatsapp_number': whatsappNumber,
         'email': email,
         'polling_unit_id': pollingUnitId,
+        'polling_unit_name': pollingUnitName,
         'created_at': createdAt.toUtc().toIso8601String(),
         'pending': pending ? 1 : 0,
         'sync_error': syncError,
@@ -202,8 +276,85 @@ class NewCanvasser {
       };
 }
 
-/// A ward coordinator an LGA coordinator added on this phone. Their login is
-/// made when it reaches the server.
+/// An LGA coordinator a state coordinator added on this phone. Their login
+/// is made when it reaches the server.
+class NewLgaCoordinator {
+  const NewLgaCoordinator({
+    required this.id,
+    required this.firstName,
+    required this.lastName,
+    required this.phone,
+    required this.lgaId,
+    required this.lgaName,
+    required this.createdAt,
+    this.whatsappNumber,
+    this.email,
+    this.pending = true,
+    this.syncError,
+    this.login,
+  });
+
+  final String id;
+  final String firstName;
+  final String lastName;
+  final String phone;
+  final String? whatsappNumber;
+  final String? email;
+  final String lgaId;
+  final String lgaName;
+  final DateTime createdAt;
+  final bool pending;
+  final String? syncError;
+
+  /// 'made' once they can sign in, from the server.
+  final String? login;
+
+  String get fullName => '$firstName $lastName';
+
+  factory NewLgaCoordinator.fromRow(Map<String, Object?> r) => NewLgaCoordinator(
+        id: r['id'] as String,
+        firstName: r['first_name'] as String,
+        lastName: r['last_name'] as String,
+        phone: r['phone'] as String,
+        whatsappNumber: r['whatsapp_number'] as String?,
+        email: r['email'] as String?,
+        lgaId: r['lga_id'] as String,
+        lgaName: r['lga_name'] as String,
+        createdAt: DateTime.parse(r['created_at'] as String),
+        pending: r['pending'] == 1,
+        syncError: r['sync_error'] as String?,
+        login: r['login'] as String?,
+      );
+
+  Map<String, Object?> toRow() => {
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'phone': phone,
+        'whatsapp_number': whatsappNumber,
+        'email': email,
+        'lga_id': lgaId,
+        'lga_name': lgaName,
+        'created_at': createdAt.toUtc().toIso8601String(),
+        'pending': pending ? 1 : 0,
+        'sync_error': syncError,
+        'login': login,
+      };
+
+  /// What onboard_lga_coordinators() takes.
+  Map<String, dynamic> toSyncJson() => {
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'phone': phone,
+        'whatsapp_number': whatsappNumber,
+        'email': email,
+        'lga_id': lgaId,
+      };
+}
+
+/// A ward coordinator an LGA or state coordinator added on this phone. Their
+/// login is made when it reaches the server.
 class NewWardCoordinator {
   const NewWardCoordinator({
     required this.id,
@@ -296,7 +447,7 @@ class VoterStats {
     required this.fetchedAt,
   });
 
-  /// What [areas] are: 'ward' or 'polling_unit'.
+  /// What [areas] are: 'lga', 'ward' or 'polling_unit'.
   final String level;
   final int units;
 
@@ -659,7 +810,7 @@ class TeamMember {
     required this.lastVisitAt,
   });
 
-  /// 'canvasser', 'ward_coordinator' or 'lga_coordinator'.
+  /// 'canvasser', 'ward_coordinator', 'lga_coordinator' or 'state_coordinator'.
   final String kind;
   final String id;
   final String name;
@@ -688,6 +839,7 @@ class TeamMember {
   String get kindLabel => switch (kind) {
         'ward_coordinator' => 'Ward coordinator',
         'lga_coordinator' => 'LGA coordinator',
+        'state_coordinator' => 'State coordinator',
         _ => 'Canvasser',
       };
 

@@ -29,7 +29,7 @@ class Config {
     defaultValue: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH',
   );
 
-  /// The roles this app signs in: canvassers, and the ward and LGA
+  /// The roles this app signs in: canvassers, and the ward, LGA and state
   /// coordinators who onboard them.
   static const appRoles = {'Canvasser', 'Coordinator'};
 

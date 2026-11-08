@@ -5,6 +5,7 @@ import '../data/models.dart';
 import '../theme.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
+import 'lga_choice.dart';
 import 'panels.dart';
 import 'voter_list_screen.dart';
 import 'ward_filter.dart';
@@ -28,8 +29,8 @@ const _ageBands = {
 };
 
 /// A coordinator's voter figures, as erims's voter dashboard shows them:
-/// their LGA or ward, narrowed to a ward or polling unit. Needs internet; the
-/// last figures fetched for each area show offline.
+/// their state, LGA or ward, narrowed to an LGA, ward or polling unit. Needs
+/// internet; the last figures fetched for each area show offline.
 class VoterStatsTab extends StatefulWidget {
   const VoterStatsTab({super.key});
 
@@ -38,7 +39,7 @@ class VoterStatsTab extends StatefulWidget {
 }
 
 class _VoterStatsTabState extends State<VoterStatsTab> {
-  /// Chosen by an LGA coordinator; a ward coordinator's is always theirs.
+  /// Chosen by an LGA or state coordinator; a ward coordinator's is always theirs.
   String? _wardId;
   String? _pollingUnitId;
   VoterStats? _stats;
@@ -65,7 +66,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
       _loading = true;
       _error = null;
     });
-    final cached = await s.db.stats(ward, unit);
+    final cached = await s.db.stats(ward, unit, lgaId: s.profile?.selectedLgaId);
     if (!mounted || request != _request) return;
     setState(() => _stats = cached);
     try {
@@ -101,12 +102,15 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
 
   void _choosePollingUnit(String id) {
     final p = CanvassScope.read(context).profile!;
-    _setArea(ward: p.isLgaCoordinator ? (p.pollingUnit(id)?.wardId ?? _wardId) : null, unit: id);
+    _setArea(ward: p.coversWards ? (p.pollingUnit(id)?.wardId ?? _wardId) : null, unit: id);
   }
 
   /// Looks into an area of the table, one level down.
   void _open(AreaStats a) {
-    if (_stats?.level == 'ward') {
+    if (_stats?.level == 'lga') {
+      final lga = CanvassScope.read(context).profile!.lga(a.id);
+      if (lga != null) chooseLga(context, lga);
+    } else if (_stats?.level == 'ward') {
       _setArea(ward: a.id, unit: null);
     } else if (_pollingUnitId == null) {
       _choosePollingUnit(a.id);
@@ -155,6 +159,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
       return u == null ? 'Polling unit' : '${u.code} · ${u.name}';
     }
     if (_wardId != null) return '${p.ward(_wardId!)?.name ?? 'Ward'} ward';
+    if (p.isStateCoordinator && p.lgaName != null) return '${p.lgaName} LGA';
     return p.areaLabel;
   }
 
@@ -211,7 +216,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
     String share(int? v) => v == null ? '–' : '$v%';
     final team = [
       '${formatCount(s.canvassers)} ${s.canvassers == 1 ? 'canvasser' : 'canvassers'}',
-      if (p.isLgaCoordinator && _pollingUnitId == null)
+      if (p.coversWards && _pollingUnitId == null)
         '${formatCount(s.wardCoordinators)} ${s.wardCoordinators == 1 ? 'ward coordinator' : 'ward coordinators'}',
     ];
     return [
@@ -345,11 +350,18 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
   /// Whether the table's areas open one level down.
   bool get _canOpen => _pollingUnitId == null;
 
+  /// What the table's areas are, in words.
+  static String _levelName(VoterStats s) => switch (s.level) {
+    'lga' => 'LGA',
+    'ward' => 'ward',
+    _ => 'polling unit',
+  };
+
   Widget _areasSection(BuildContext context, VoterStats s) {
     final areas = [...s.areas]..sort(_sort.compare);
     final most = s.areas.fold<int>(0, (m, a) => a.voters > m ? a.voters : m);
     return Panel(
-      title: s.level == 'ward' ? 'By ward' : 'By polling unit',
+      title: 'By ${_levelName(s)}',
       action: PopupMenuButton<_Sort>(
         tooltip: 'Sort',
         initialValue: _sort,
@@ -411,7 +423,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
       double share(AreaStats a) => a.supporters / a.canvassed;
       final strongest = compared.reduce((b, a) => share(a) > share(b) ? a : b);
       final weakest = compared.reduce((w, a) => share(a) < share(w) ? a : w);
-      final name = s.level == 'ward' ? 'ward' : 'polling unit';
+      final name = _levelName(s);
       out.add(
         _Focus(
           Icons.trending_up,
@@ -482,8 +494,10 @@ enum _Sort {
   };
 }
 
-/// LGA, ward and polling unit, as erims's area filter: an LGA coordinator
-/// chooses the ward; a ward coordinator's is fixed.
+/// LGA, ward and polling unit, as erims's area filter: an LGA or state
+/// coordinator chooses the ward; a ward coordinator's is fixed. A state
+/// coordinator chooses the LGA above the tabs, and has nothing to narrow
+/// until they do.
 class _Filters extends StatelessWidget {
   const _Filters({
     required this.profile,
@@ -504,6 +518,8 @@ class _Filters extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = profile;
+    final lgaName = p.lgaName;
+    if (lgaName == null) return const SizedBox.shrink();
     final wards = p.wards;
     final unit = pollingUnitId == null ? null : p.pollingUnit(pollingUnitId!);
     Widget fixed(String label, String value) => InputDecorator(
@@ -514,10 +530,10 @@ class _Filters extends StatelessWidget {
       children: [
         Row(
           children: [
-            Expanded(child: fixed('LGA', p.lgaName)),
+            Expanded(child: fixed('LGA', lgaName)),
             const SizedBox(width: 8),
             Expanded(
-              child: !p.isLgaCoordinator
+              child: !p.coversWards
                   ? fixed('Ward', p.wardName ?? '')
                   : DropdownButtonFormField<String?>(
                       // Rebuilt when a drill-down changes the ward.

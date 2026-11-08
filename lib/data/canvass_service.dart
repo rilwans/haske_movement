@@ -103,10 +103,27 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     await _changed();
   }
 
-  /// A ward coordinator an LGA coordinator added, sent with the next sync.
+  /// A ward coordinator an LGA or state coordinator added, sent with the next sync.
   Future<void> addWardCoordinator(NewWardCoordinator c) async {
     await db.addWardCoordinator(c);
     await _changed();
+  }
+
+  /// An LGA coordinator a state coordinator added, sent with the next sync.
+  Future<void> addLgaCoordinator(NewLgaCoordinator c) async {
+    await db.addLgaCoordinator(c);
+    await _changed();
+  }
+
+  /// A state coordinator moves to [lga], or to the whole state when null.
+  /// An LGA not opened before needs internet; throws otherwise.
+  Future<void> chooseLga(Lga? lga) async {
+    final units = lga == null ? const <PollingUnit>[] : await _lgaPollingUnits(lga.id);
+    final p = profile!.forLga(lga, units);
+    profile = p;
+    await db.saveProfile(p);
+    revision++;
+    notifyListeners();
   }
 
   Future<void> addVoter(Voter v) async {
@@ -139,15 +156,20 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
       await _push();
       await _makeLogins();
       // They may have been moved, or their area changed.
-      final p = await _fetchProfile();
-      await db.saveProfile(p);
+      final p = await _latestProfile();
+      final previous = profile;
       profile = p;
-      final inScope = p.pollingUnits.map((u) => u.id).toSet();
-      for (final id in downloaded.difference(inScope)) {
+      await db.saveProfile(p);
+      // A state coordinator's profile only lists the chosen LGA's polling
+      // units; what they downloaded elsewhere is theirs while their state is.
+      final gone = p.isStateCoordinator
+          ? (previous?.stateName == p.stateName ? <String>{} : downloaded)
+          : downloaded.difference(p.pollingUnits.map((u) => u.id).toSet());
+      for (final id in gone) {
         await db.forgetPollingUnit(id);
       }
       // A canvasser always has their polling unit; a coordinator what they downloaded.
-      final toPull = p.isCoordinator ? downloaded.intersection(inScope) : {p.pollingUnits.first.id};
+      final toPull = p.isCoordinator ? downloaded.difference(gone) : {p.pollingUnits.first.id};
       for (final id in toPull) {
         await _pullVoters(id);
       }
@@ -175,6 +197,13 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
       });
       await db.markOnboardedSynced('ward_coordinators', _results(res));
     }
+    final lgaCoordinators = await db.pendingLgaCoordinators();
+    if (lgaCoordinators.isNotEmpty) {
+      final res = await _client.rpc('onboard_lga_coordinators', params: {
+        'items': lgaCoordinators.map((c) => c.toSyncJson()).toList(),
+      });
+      await db.markOnboardedSynced('lga_coordinators', _results(res));
+    }
     final canvassers = await db.pendingCanvassers();
     final voters = await db.pendingVoters();
     final visits = await db.unsyncedVisits();
@@ -199,12 +228,13 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Logins for the canvassers and ward coordinators a coordinator onboarded:
-  /// canvass_sync() or onboard_ward_coordinators() makes the person, and
-  /// erims's canvasser-logins function their login.
+  /// Logins for the canvassers and coordinators a coordinator onboarded:
+  /// canvass_sync() or onboard_ward_coordinators() or
+  /// onboard_lga_coordinators() makes the person, and erims's
+  /// canvasser-logins function their login.
   Future<void> _makeLogins() async {
     if (profile?.isCoordinator != true) return;
-    for (final team in ['canvassers', 'ward_coordinators']) {
+    for (final team in ['canvassers', 'ward_coordinators', if (profile!.isStateCoordinator) 'lga_coordinators']) {
       final ids = await db.awaitingLogin(team);
       for (var i = 0; i < ids.length; i += 100) {
         final res = await _client.functions.invoke(
@@ -221,12 +251,14 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   /// Needs internet; throws a message to show otherwise.
   Future<VoterStats> fetchStats({String? wardId, String? pollingUnitId}) async {
     await _ensureSession();
+    final lgaId = profile?.selectedLgaId;
     final json = await _client.rpc('app_voter_stats', params: {
       'p_ward_id': wardId,
       'p_polling_unit_id': pollingUnitId,
+      ..._lgaParam,
     }) as Map<String, dynamic>;
     json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
-    await db.saveStats(wardId, pollingUnitId, json);
+    await db.saveStats(wardId, pollingUnitId, json, lgaId: lgaId);
     return VoterStats.fromJson(json);
   }
 
@@ -234,18 +266,20 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   /// [since] (ever, when null). Needs internet; throws a message otherwise.
   Future<TeamActivity> fetchTeamActivity({String? wardId, DateTime? since}) async {
     await _ensureSession();
+    final lgaId = profile?.selectedLgaId;
     final json = await _client.rpc('app_team_activity', params: {
       'p_ward_id': wardId,
       'p_since': since?.toUtc().toIso8601String(),
+      ..._lgaParam,
     }) as Map<String, dynamic>;
     json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
-    await db.saveCached(teamActivityKey(wardId, since), json);
+    await db.saveCached(teamActivityKey(wardId, since, lgaId), json);
     return TeamActivity.fromJson(json);
   }
 
   /// Where [fetchTeamActivity] keeps its answer; periods are kept by day.
-  static String teamActivityKey(String? wardId, DateTime? since) =>
-      'team:${wardId ?? ''}:${since == null ? '' : '${since.year}-${since.month}-${since.day}'}';
+  static String teamActivityKey(String? wardId, DateTime? since, String? lgaId) =>
+      'team:${lgaId == null ? '' : '$lgaId:'}${wardId ?? ''}:${since == null ? '' : '${since.year}-${since.month}-${since.day}'}';
 
   /// Someone on the coordinator's team's latest visits. Needs internet.
   Future<List<TeamVisit>> fetchPersonVisits(TeamMember m) async {
@@ -257,13 +291,17 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   /// The wards in the coordinator's area and their targets. Needs internet.
   Future<WardTargets> fetchTargets() async {
     await _ensureSession();
-    final json = await _client.rpc('app_ward_targets') as Map<String, dynamic>;
+    final lgaId = profile?.selectedLgaId;
+    final json = await _client.rpc('app_ward_targets', params: _lgaParam) as Map<String, dynamic>;
     json['fetched_at'] = DateTime.now().toUtc().toIso8601String();
-    await db.saveCached('targets', json);
+    await db.saveCached(targetsKey(lgaId), json);
     return WardTargets.fromJson(json);
   }
 
-  /// An LGA coordinator sets a ward's target from today, or with no
+  /// Where [fetchTargets] keeps its answer.
+  static String targetsKey(String? lgaId) => lgaId == null ? 'targets' : 'targets:$lgaId';
+
+  /// An LGA or state coordinator sets a ward's target from today, or with no
   /// [percent] removes it. Needs internet.
   Future<void> setWardTarget(String wardId, {int? percent, DateTime? dueOn}) async {
     await _ensureSession();
@@ -278,6 +316,38 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
 
   static List<Map<String, dynamic>> _results(Object? list) =>
       ((list as List?) ?? const []).cast<Map<String, dynamic>>();
+
+  /// A state coordinator's chosen LGA for the server; erims knows anyone
+  /// else's area, and older deployments don't take the argument.
+  Map<String, dynamic> get _lgaParam =>
+      profile?.isStateCoordinator == true ? {'p_lga_id': profile!.selectedLgaId} : const {};
+
+  /// An LGA's polling units, from the server or, offline, as last fetched.
+  Future<List<PollingUnit>> _lgaPollingUnits(String lgaId) async {
+    List<PollingUnit> parse(List rows) => [for (final r in rows) PollingUnit.fromJson(r as Map<String, dynamic>)];
+    final key = 'lga_units:$lgaId';
+    try {
+      await _ensureSession();
+      final rows = await _client.rpc('app_lga_polling_units', params: {'p_lga_id': lgaId}) as List;
+      await db.saveCached(key, {'units': rows});
+      return parse(rows);
+    } catch (e) {
+      final cached = await db.cached(key);
+      if (cached == null || !_isNetworkError(e)) rethrow;
+      return parse(cached['units'] as List);
+    }
+  }
+
+  /// The profile from the server, keeping a state coordinator on their LGA.
+  Future<AppProfile> _latestProfile() async {
+    final fresh = await _fetchProfile();
+    if (!fresh.isStateCoordinator) return fresh;
+    final chosen = fresh.lga(profile?.selectedLgaId);
+    final kept = chosen == null ? fresh : fresh.forLga(chosen, await _lgaPollingUnits(chosen.id));
+    // They may have moved to another LGA while that loaded.
+    final now = profile!;
+    return now.selectedLgaId == kept.selectedLgaId ? kept : kept.forLga(fresh.lga(now.selectedLgaId), now.pollingUnits);
+  }
 
   Future<AppProfile> _fetchProfile() async {
     final json = await _client.rpc('my_app_profile');

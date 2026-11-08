@@ -19,9 +19,9 @@ String _date(DateTime d) {
 }
 
 /// Each ward's canvassing against its target: how far along, whether it's on
-/// pace, and when it'll get there at the recent rate. LGA coordinators set
-/// their wards' targets; a ward coordinator sees theirs. Needs internet; the
-/// last figures show offline.
+/// pace, and when it'll get there at the recent rate. LGA and state
+/// coordinators set their wards' targets; a ward coordinator sees theirs.
+/// Needs internet; the last figures show offline.
 class TargetsTab extends StatefulWidget {
   const TargetsTab({super.key});
 
@@ -46,7 +46,7 @@ class _TargetsTabState extends State<TargetsTab> {
       _loading = true;
       _error = null;
     });
-    final cached = await s.db.cached('targets');
+    final cached = await s.db.cached(CanvassService.targetsKey(s.profile?.selectedLgaId));
     if (!mounted) return;
     if (_targets == null && cached != null) setState(() => _targets = WardTargets.fromJson(cached));
     try {
