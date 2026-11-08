@@ -159,7 +159,7 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
       return u == null ? 'Polling unit' : '${u.code} · ${u.name}';
     }
     if (_wardId != null) return '${p.ward(_wardId!)?.name ?? 'Ward'} ward';
-    if (p.isStateCoordinator && p.lgaName != null) return '${p.lgaName} LGA';
+    if (p.picksLga && p.lgaName != null) return '${p.lgaName} LGA';
     return p.areaLabel;
   }
 
@@ -333,7 +333,8 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
                   ],
                 ),
         ),
-        if (_pollingUnitId == null) _areasSection(context, s),
+        // A candidate's ward has no polling unit rows.
+        if (_pollingUnitId == null && s.areas.isNotEmpty) _areasSection(context, s),
         Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Text(
@@ -347,8 +348,10 @@ class _VoterStatsTabState extends State<VoterStatsTab> {
     ];
   }
 
-  /// Whether the table's areas open one level down.
-  bool get _canOpen => _pollingUnitId == null;
+  /// Whether the table's areas open one level down; a candidate's figures
+  /// stop at the ward, and they don't open voter lists.
+  bool get _canOpen =>
+      _pollingUnitId == null && !(CanvassScope.read(context).profile!.isCandidate && _stats?.level == 'polling_unit');
 
   /// What the table's areas are, in words.
   static String _levelName(VoterStats s) => switch (s.level) {
@@ -530,7 +533,7 @@ class _Filters extends StatelessWidget {
       children: [
         Row(
           children: [
-            if (!p.isStateCoordinator) ...[
+            if (!p.picksLga) ...[
               Expanded(child: fixed('LGA', lgaName)),
               const SizedBox(width: 8),
             ],
@@ -556,27 +559,29 @@ class _Filters extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: onPickPollingUnit,
-          child: InputDecorator(
-            decoration: InputDecoration(
-              labelText: 'Polling unit',
-              isDense: true,
-              suffixIcon: unit == null
-                  ? const Icon(Icons.arrow_drop_down)
-                  : IconButton(
-                      tooltip: 'All polling units',
-                      icon: const Icon(Icons.close),
-                      onPressed: onClearPollingUnit,
-                    ),
-            ),
-            child: Text(
-              unit == null ? 'All polling units' : '${unit.code} · ${unit.name}',
-              overflow: TextOverflow.ellipsis,
+        if (!p.isCandidate) ...[
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: onPickPollingUnit,
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Polling unit',
+                isDense: true,
+                suffixIcon: unit == null
+                    ? const Icon(Icons.arrow_drop_down)
+                    : IconButton(
+                        tooltip: 'All polling units',
+                        icon: const Icon(Icons.close),
+                        onPressed: onClearPollingUnit,
+                      ),
+              ),
+              child: Text(
+                unit == null ? 'All polling units' : '${unit.code} · ${unit.name}',
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -637,7 +642,9 @@ class _SplitBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(4),
                   child: SizedBox(
                     width: width,
+                    height: height,
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         for (var i = 0; i < shown.length; i++) ...[
                           if (i > 0) const SizedBox(width: 2),

@@ -87,7 +87,10 @@ class _StateStatsTabState extends State<StateStatsTab> {
 /// towards the election, the vote count, LGAs ranked, gaps in the team, and
 /// what voters care about. Needs internet; the last figures show offline.
 class StateOverviewTab extends StatefulWidget {
-  const StateOverviewTab({super.key});
+  const StateOverviewTab({super.key, this.onOpen});
+
+  /// What tapping an LGA does, instead of moving to it.
+  final ValueChanged<LgaOverview>? onOpen;
 
   @override
   State<StateOverviewTab> createState() => _StateOverviewTabState();
@@ -163,7 +166,13 @@ class _StateOverviewTabState extends State<StateOverviewTab> {
               padding: EdgeInsets.all(32),
               child: Text('Loading the overview…', textAlign: TextAlign.center),
             ),
-          if (o != null) StateOverviewPanels(overview: o, areaLabel: p.areaLabel, onOpen: _open),
+          if (o != null)
+            StateOverviewPanels(
+              overview: o,
+              areaLabel: p.areaLabel,
+              onOpen: widget.onOpen ?? _open,
+              forCandidate: p.isCandidate,
+            ),
         ],
       ),
     );
@@ -172,11 +181,20 @@ class _StateOverviewTabState extends State<StateOverviewTab> {
 
 /// The overview's figures for [overview]; tapping an LGA calls [onOpen].
 class StateOverviewPanels extends StatefulWidget {
-  const StateOverviewPanels({super.key, required this.overview, required this.areaLabel, required this.onOpen});
+  const StateOverviewPanels({
+    super.key,
+    required this.overview,
+    required this.areaLabel,
+    required this.onOpen,
+    this.forCandidate = false,
+  });
 
   final StateOverview overview;
   final String areaLabel;
   final ValueChanged<LgaOverview> onOpen;
+
+  /// Adds the headline figures and the size of the team.
+  final bool forCandidate;
 
   @override
   State<StateOverviewPanels> createState() => _StateOverviewPanelsState();
@@ -200,10 +218,12 @@ class _StateOverviewPanelsState extends State<StateOverviewPanels> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
+        if (widget.forCandidate) _Headline(overview: o),
         _attention(context, o),
         _Momentum(overview: o),
         _VoteCount(overview: o),
         _ranking(context, o),
+        if (widget.forCandidate) _TeamStrength(overview: o),
         _coverage(context, o),
         _issues(context, o),
       ],
@@ -342,6 +362,99 @@ class _StateOverviewPanelsState extends State<StateOverviewPanels> {
                 ),
               ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The three figures a candidate looks at first.
+class _Headline extends StatelessWidget {
+  const _Headline({required this.overview});
+
+  final StateOverview overview;
+
+  @override
+  Widget build(BuildContext context) {
+    final o = overview;
+    final t = Theme.of(context).textTheme;
+    final days = o.daysLeft(DateTime.now());
+    final canvassed = percent(o.total((l) => l.canvassed), o.total((l) => l.voters));
+    Widget figure(String value, String label) => Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value, style: t.headlineSmall),
+          Text(label, style: t.bodySmall),
+        ],
+      ),
+    );
+    return Panel(
+      title: o.electionName ?? 'At a glance',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (o.electionDate != null) ...[
+            Text(shortDate(o.electionDate!), style: t.bodySmall),
+            const SizedBox(height: 8),
+          ],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              figure(days == null || days < 0 ? '–' : formatCount(days), days == 1 ? 'day to go' : 'days to go'),
+              const SizedBox(width: 8),
+              figure(canvassed == null ? '–' : '$canvassed%', 'canvassed'),
+              const SizedBox(width: 8),
+              figure(formatCount(o.total((l) => l.ready)), 'ready to vote'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// How many people are working each LGA, without who they are.
+class _TeamStrength extends StatelessWidget {
+  const _TeamStrength({required this.overview});
+
+  final StateOverview overview;
+
+  @override
+  Widget build(BuildContext context) {
+    final o = overview;
+    final t = Theme.of(context).textTheme;
+    String people(int n, String one, String many) => '${formatCount(n)} ${n == 1 ? one : many}';
+    String line(int lga, int ward, int canvassers) => [
+      people(lga, 'LGA coordinator', 'LGA coordinators'),
+      people(ward, 'ward coordinator', 'ward coordinators'),
+      people(canvassers, 'canvasser', 'canvassers'),
+    ].join(' · ');
+    return Panel(
+      title: 'Team strength',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${line(o.total((l) => l.lgaCoordinators), o.total((l) => l.wardCoordinators), o.total((l) => l.canvassers))}. '
+            '${formatCount(o.total((l) => l.active7d))} active in the last 7 days.',
+            style: t.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          for (final l in o.lgas)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l.name, style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                  Text(
+                    '${line(l.lgaCoordinators, l.wardCoordinators, l.canvassers)} · ${formatCount(l.active7d)} active',
+                    style: t.bodySmall,
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
