@@ -35,6 +35,9 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   bool online = true;
   String? lastError;
 
+  /// What others sent that hasn't been opened yet, the latest first.
+  List<Announcement> unreadAnnouncements = const [];
+
   /// Bumped on every local change, for lists to reload.
   int revision = 0;
 
@@ -80,11 +83,13 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
     await db.saveProfile(p);
     if (!p.isCoordinator) await _pullVoters(p.pollingUnits.first.id);
     profile = p;
+    await _syncAnnouncements();
     downloaded = await db.downloadedPollingUnits();
     lastSyncedAt = DateTime.now();
     await db.setLastSyncedAt(lastSyncedAt!);
     online = true;
     revision++;
+    await _refreshCounts();
     notifyListeners();
   }
 
@@ -168,8 +173,9 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
       for (final id in gone) {
         await db.forgetPollingUnit(id);
       }
+      await _syncAnnouncements();
       // A canvasser always has their polling unit; a coordinator what they downloaded.
-      final toPull = p.isCoordinator ? downloaded.difference(gone) : {p.pollingUnits.first.id};
+      final toPull =p.isCoordinator ? downloaded.difference(gone) : {p.pollingUnits.first.id};
       for (final id in toPull) {
         await _pullVoters(id);
       }
@@ -226,6 +232,53 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
       await db.markVotersSynced(_results(res['voters']));
       await db.markVisitsSynced(_results(res['visits']));
     }
+  }
+
+  /// Tells the server which announcements were opened, then fetches the
+  /// latest. Failing doesn't fail the sync, so canvassing still goes through;
+  /// it's tried again at the next one.
+  Future<void> _syncAnnouncements() async {
+    if (profile?.isCandidate == true) return;
+    try {
+      final opened = await db.unsentAnnouncementReads();
+      if (opened.isNotEmpty) {
+        await _client.rpc('mark_announcements_read', params: {'p_ids': opened});
+        await db.markAnnouncementReadsSent(opened);
+      }
+      final rows = await _client.rpc('app_announcements') as List;
+      await db.replaceAnnouncements(rows.cast<Map<String, dynamic>>());
+    } catch (_) {}
+  }
+
+  /// They've opened their announcements. Read offline, sent with the next sync.
+  Future<void> openAnnouncements() async {
+    await db.markAnnouncementsRead();
+    await _changed();
+  }
+
+  /// A coordinator sends an announcement to their whole area, or [lgaId] or
+  /// [wardId] in it. [id] stays the same across retries, so a lost answer
+  /// doesn't send it twice. Needs internet; throws a message otherwise.
+  Future<void> postAnnouncement({required String id, required String body, String? lgaId, String? wardId}) async {
+    await _ensureSession();
+    final json = await _client.rpc('post_announcement', params: {
+      'p_id': id,
+      'p_body': body,
+      'p_lga_id': lgaId,
+      'p_ward_id': wardId,
+    }) as Map<String, dynamic>;
+    await db.addAnnouncement(json);
+    revision++;
+    notifyListeners();
+  }
+
+  /// The author takes an announcement back. Needs internet.
+  Future<void> withdrawAnnouncement(String id) async {
+    await _ensureSession();
+    await _client.rpc('withdraw_announcement', params: {'p_id': id});
+    await db.deleteAnnouncement(id);
+    revision++;
+    notifyListeners();
   }
 
   /// Logins for the canvassers and coordinators a coordinator onboarded:
@@ -405,6 +458,7 @@ class CanvassService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _refreshCounts() async {
     pending = await db.pendingCount();
     failed = await db.failedCount();
+    unreadAnnouncements = await db.unreadAnnouncements();
   }
 
   /// Signs out and removes this login's data from the device. Refused while

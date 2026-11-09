@@ -106,6 +106,22 @@ class AppProfile {
 
   /// Whether they work across wards, so choose among them.
   bool get coversWards => isLgaCoordinator || picksLga;
+
+  /// Whether they can send announcements: a coordinator, not a candidate.
+  bool get canAnnounce => isCoordinator && !isCandidate;
+
+  /// Who they can send an announcement to, their whole area first.
+  List<AnnouncementAudience> get announcementAudiences => isStateCoordinator
+      ? [
+          AnnouncementAudience(label: '$stateName State'),
+          for (final l in lgas) AnnouncementAudience(label: '${l.name} LGA', lgaId: l.id),
+        ]
+      : isLgaCoordinator
+          ? [
+              AnnouncementAudience(label: '$lgaName LGA'),
+              for (final w in wards) AnnouncementAudience(label: '${w.name} ward', wardId: w.id),
+            ]
+          : [AnnouncementAudience(label: '$wardName ward')];
   String get fullName => '$firstName $lastName'.trim();
 
   String get roleLabel => switch (role) {
@@ -748,6 +764,81 @@ class Visit {
         'latitude': latitude,
         'longitude': longitude,
       };
+}
+
+/// What a coordinator sent to everyone in a state, LGA or ward.
+class Announcement {
+  const Announcement({
+    required this.id,
+    required this.body,
+    required this.authorName,
+    required this.authorRole,
+    required this.areaName,
+    required this.createdAt,
+    required this.mine,
+    required this.audience,
+    required this.readCount,
+    required this.read,
+  });
+
+  final String id;
+  final String body;
+  final String authorName;
+
+  /// 'ward_coordinator', 'lga_coordinator' or 'state_coordinator'.
+  final String authorRole;
+
+  /// Who it's for, such as "Baruten LGA".
+  final String areaName;
+  final DateTime createdAt;
+
+  /// Whether the signed-in person sent it.
+  final bool mine;
+
+  /// For the author: people with a login it reaches, and how many have opened it.
+  final int? audience;
+  final int? readCount;
+  final bool read;
+
+  bool get unread => !mine && !read;
+
+  String get authorRoleLabel => switch (authorRole) {
+        'ward_coordinator' => 'Ward coordinator',
+        'lga_coordinator' => 'LGA coordinator',
+        'state_coordinator' => 'State coordinator',
+        _ => 'Coordinator',
+      };
+
+  String get readLabel => audience == 0 ? 'Nobody there has a login yet' : 'Read by ${readCount ?? 0} of ${audience ?? 0}';
+
+  factory Announcement.fromRow(Map<String, Object?> r) => Announcement(
+        id: r['id'] as String,
+        body: r['body'] as String,
+        authorName: r['author_name'] as String,
+        authorRole: r['author_role'] as String,
+        areaName: r['area_name'] as String,
+        createdAt: DateTime.parse(r['created_at'] as String),
+        mine: r['mine'] == 1,
+        audience: r['audience'] as int?,
+        readCount: r['read_count'] as int?,
+        read: r['read'] == 1,
+      );
+}
+
+/// Who an announcement can go to. Neither id means the sender's whole area.
+class AnnouncementAudience {
+  const AnnouncementAudience({required this.label, this.lgaId, this.wardId});
+
+  final String label;
+  final String? lgaId;
+  final String? wardId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AnnouncementAudience && other.lgaId == lgaId && other.wardId == wardId;
+
+  @override
+  int get hashCode => Object.hash(lgaId, wardId);
 }
 
 /// Who to visit next at a polling unit, by each voter's latest visit: erims's

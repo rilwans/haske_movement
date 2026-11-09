@@ -19,7 +19,7 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'canvass_$userId.db');
     final db = await openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: (db, _) async {
         await db.execute('create table meta (key text primary key, value text not null)');
         await db.execute('''
@@ -60,6 +60,7 @@ class LocalDb {
         await _createV4(db);
         await _createV5(db);
         await _createV6(db);
+        await _createV7(db);
       },
       onUpgrade: (db, from, _) async {
         if (from < 2) {
@@ -72,6 +73,7 @@ class LocalDb {
         if (from < 4) await _createV4(db);
         if (from < 5) await _createV5(db);
         if (from < 6) await _createV6(db);
+        if (from < 7) await _createV7(db);
       },
     );
     return LocalDb._(db, path);
@@ -154,6 +156,25 @@ class LocalDb {
         login text
       )''');
     await db.execute('alter table canvassers add column polling_unit_name text');
+  }
+
+  /// Version 7: announcements, kept for reading offline. read_sent is 0 while
+  /// the server hasn't been told this one was opened.
+  static Future<void> _createV7(Database db) async {
+    await db.execute('''
+      create table announcements (
+        id text primary key,
+        body text not null,
+        author_name text not null,
+        author_role text not null,
+        area_name text not null,
+        created_at text not null,
+        mine integer not null default 0,
+        audience integer,
+        read_count integer,
+        read integer not null default 0,
+        read_sent integer not null default 1
+      )''');
   }
 
   /// Closes and deletes this login's data, at sign-out.
@@ -409,6 +430,67 @@ class LocalDb {
       (await _db.query('ward_coordinators', where: 'pending = 1', orderBy: 'created_at'))
           .map(NewWardCoordinator.fromRow)
           .toList();
+
+  // --- Announcements ------------------------------------------------------
+
+  static Map<String, Object?> _announcementRow(Map<String, dynamic> r, {bool read = false, bool readSent = true}) => {
+        'id': r['id'],
+        'body': r['body'],
+        'author_name': r['author_name'],
+        'author_role': r['author_role'],
+        'area_name': r['area_name'],
+        // As the phone stores its own times, so they sort.
+        'created_at': DateTime.parse(r['created_at'] as String).toUtc().toIso8601String(),
+        'mine': r['mine'] == true ? 1 : 0,
+        'audience': r['audience'],
+        'read_count': r['read_count'],
+        'read': read || r['read'] == true ? 1 : 0,
+        'read_sent': readSent ? 1 : 0,
+      };
+
+  /// Everything the person can see, the latest first.
+  Future<List<Announcement>> announcements() async =>
+      (await _db.query('announcements', orderBy: 'created_at desc')).map(Announcement.fromRow).toList();
+
+  /// What others sent that hasn't been opened yet, the latest first.
+  Future<List<Announcement>> unreadAnnouncements() async =>
+      (await _db.query('announcements', where: 'mine = 0 and read = 0', orderBy: 'created_at desc'))
+          .map(Announcement.fromRow)
+          .toList();
+
+  /// Swaps in the server's list, keeping what was opened here and not yet sent.
+  Future<void> replaceAnnouncements(List<Map<String, dynamic>> rows) => _db.transaction((tx) async {
+        final unsent = (await tx.query('announcements', columns: ['id'], where: 'read_sent = 0'))
+            .map((r) => r['id'] as String)
+            .toSet();
+        await tx.delete('announcements');
+        final batch = tx.batch();
+        for (final r in rows) {
+          final waiting = unsent.contains(r['id']);
+          batch.insert('announcements', _announcementRow(r, read: waiting, readSent: !waiting));
+        }
+        await batch.commit(noResult: true);
+      });
+
+  /// One this phone just sent, ahead of the next sync.
+  Future<void> addAnnouncement(Map<String, dynamic> json) =>
+      _db.insert('announcements', _announcementRow(json), conflictAlgorithm: ConflictAlgorithm.replace);
+
+  Future<void> deleteAnnouncement(String id) => _db.delete('announcements', where: 'id = ?', whereArgs: [id]);
+
+  /// They've opened their announcements; the server's told at the next sync.
+  Future<void> markAnnouncementsRead() =>
+      _db.update('announcements', {'read': 1, 'read_sent': 0}, where: 'mine = 0 and read = 0');
+
+  Future<List<String>> unsentAnnouncementReads() async =>
+      (await _db.query('announcements', columns: ['id'], where: 'read_sent = 0')).map((r) => r['id'] as String).toList();
+
+  Future<void> markAnnouncementReadsSent(List<String> ids) => _db.update(
+        'announcements',
+        {'read_sent': 1},
+        where: 'id in (${List.filled(ids.length, '?').join(', ')})',
+        whereArgs: ids,
+      );
 
   // --- What's waiting to sync ---------------------------------------------
 
