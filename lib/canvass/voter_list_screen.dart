@@ -5,6 +5,7 @@ import '../data/models.dart';
 import '../theme.dart';
 import 'account_menu.dart';
 import 'add_voter_screen.dart';
+import 'announcements.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
 import 'sync_bar.dart';
@@ -77,11 +78,12 @@ class _VoterListScreenState extends State<VoterListScreen> {
             ),
           ],
         ),
-        actions: [if (widget.isHome) const AccountMenu()],
+        actions: [if (widget.isHome) ...const [AnnouncementsButton(), AccountMenu()]],
       ),
       body: Column(
         children: [
           const SyncBar(),
+          if (widget.isHome) const AnnouncementBanner(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: TextField(

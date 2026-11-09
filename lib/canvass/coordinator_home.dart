@@ -5,6 +5,7 @@ import '../data/canvass_service.dart';
 import '../data/models.dart';
 import '../theme.dart';
 import 'account_menu.dart';
+import 'announcements.dart';
 import 'canvass_shell.dart';
 import 'format.dart';
 import 'lga_choice.dart';
@@ -114,11 +115,12 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
             Text(p.roleLabel, style: theme.textTheme.bodySmall),
           ],
         ),
-        actions: const [AccountMenu()],
+        actions: const [AnnouncementsButton(), AccountMenu()],
       ),
       body: Column(
         children: [
           const SyncBar(),
+          const AnnouncementBanner(),
           if (p.isStateCoordinator) const LgaBar(),
           Expanded(
             child: IndexedStack(
@@ -149,6 +151,20 @@ class _CoordinatorHomeState extends State<CoordinatorHome> {
                     children: [
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => openScreen(
+                              context,
+                              const NewAnnouncementScreen(),
+                            ),
+                            icon: const Icon(Icons.campaign_outlined),
+                            label: const Text('Send an announcement'),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                         child: SizedBox(
                           width: double.infinity,
                           child: SegmentedButton<bool>(
